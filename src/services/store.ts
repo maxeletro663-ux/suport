@@ -174,6 +174,20 @@ export async function checkRateLimit(phone: string): Promise<boolean> {
   return cur.count <= RATE_LIMIT_MAX;
 }
 
+// ── Anti-loop: texto enviado pelo bot recentemente ──────────
+export async function setSentText(phone: string, normalizedText: string): Promise<void> {
+  const key = `sup:sent:${phone}`;
+  const v = normalizedText.slice(0, 1000);
+  if (redis) await redis.set(key, v, { ex: 20 });
+  else memSet(key, v, 20);
+}
+
+export async function getSentText(phone: string): Promise<string | null> {
+  const key = `sup:sent:${phone}`;
+  if (redis) return redis.get<string>(key);
+  return memGet(key);
+}
+
 // ── Health ──────────────────────────────────────────────────
 export async function pingStore(): Promise<boolean> {
   if (!redis) return true;

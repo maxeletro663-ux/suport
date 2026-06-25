@@ -14,6 +14,8 @@ import {
   isDebounceWaiting,
   clearDebounceWaiting,
   checkRateLimit,
+  setSentText,
+  getSentText,
   isActive,
   setActive,
   isPaused,
@@ -116,8 +118,10 @@ async function handleMessage(ctx: UserCtx, text: string): Promise<void> {
       { role: "assistant", content: reply },
     ]);
 
-    // Marca o eco ANTES de enviar (p/ distinguir a resposta da IA de um humano em fromMe)
-    await setBotEcho(phone, normalize(reply));
+    // Marca eco + anti-loop ANTES de enviar
+    const normalizedReply = normalize(reply);
+    await setBotEcho(phone, normalizedReply);
+    await setSentText(phone, normalizedReply);
 
     for (const chunk of splitMessage(reply)) await sendText(jid, chunk);
 
@@ -152,8 +156,11 @@ app.post("/webhook", async (request, reply) => {
   const message = data?.message as Record<string, unknown> | undefined;
 
   const rawJid = String(key?.remoteJid ?? "");
-  const fromMe = Boolean(key?.fromMe);
+  const rawFromMe = key?.fromMe;
+  const fromMe = rawFromMe === true || rawFromMe === "true";
   const messageType = String(data?.messageType ?? "");
+
+  console.log(`[suporte] fromMe raw=${JSON.stringify(rawFromMe)} resolved=${fromMe}`);
 
   if (rawJid.endsWith("@g.us")) return ok200();
   if (rawJid === "status@broadcast") return ok200();
@@ -177,6 +184,18 @@ app.post("/webhook", async (request, reply) => {
       console.log(`[suporte] humano assumiu → pausa para ${phone}`);
     }
     return ok200();
+  }
+
+  // ── Anti-loop: se o texto bate com algo que o bot enviou recentemente, é eco ──
+  if (text) {
+    const sentByBot = await getSentText(phone);
+    if (sentByBot) {
+      const nIn = normalize(text);
+      if (nIn && (sentByBot.includes(nIn.slice(0, 80)) || nIn.includes(sentByBot.slice(0, 80)))) {
+        console.log(`[suporte] echo detectado (anti-loop) — ignorando ${phone}`);
+        return ok200();
+      }
+    }
   }
 
   // ── Mensagem do CLIENTE ──
