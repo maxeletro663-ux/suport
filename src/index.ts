@@ -138,7 +138,14 @@ app.post("/webhook", async (request, reply) => {
   const ok200 = () => reply.code(200).send({ ok: true });
   const body = request.body as Record<string, unknown>;
 
-  if (body?.event !== "messages.upsert") return ok200();
+  // Loga TODA entrada (diagnóstico) e aceita o evento em qualquer formato:
+  // "messages.upsert" / "MESSAGES_UPSERT" / "messages_upsert".
+  const ev = String(body?.event ?? "").toLowerCase().replace(/[._-]/g, "");
+  const d0 = body?.data as Record<string, unknown> | undefined;
+  const k0 = d0?.key as Record<string, unknown> | undefined;
+  console.log(`[suporte] webhook event=${String(body?.event ?? "(vazio)")} type=${String(d0?.messageType ?? "-")} fromMe=${String(k0?.fromMe ?? "-")} jid=${String(k0?.remoteJid ?? "-")}`);
+
+  if (ev && ev !== "messagesupsert") return ok200();
 
   const data = body.data as Record<string, unknown>;
   const key = data?.key as Record<string, unknown>;
