@@ -64,6 +64,24 @@ interface Channel {
   presence?: (durationMs: number) => Promise<void>;
 }
 
+// Monta um transcript curto da conversa (últimas trocas) para o atendente humano.
+function formatTranscript(
+  messages: { role: string; content: string }[],
+  maxMsgs = 10,
+  maxLen = 240,
+): string {
+  return messages
+    .slice(-maxMsgs)
+    .map((m) => {
+      const who = m.role === "user" ? "Cliente" : "Bia";
+      let c = (m.content || "").replace(/\s+/g, " ").trim();
+      if (c.length > maxLen) c = c.slice(0, maxLen) + "…";
+      return c ? `${who}: ${c}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 // Aviso ao atendente humano (11937597009) via Evolution, ao transferir.
 async function notifyHuman(
   phone: string,
@@ -71,10 +89,12 @@ async function notifyHuman(
   motivo: string | undefined,
   resumo: string | undefined,
   canal: string,
+  transcript?: { role: string; content: string }[],
 ): Promise<void> {
   try {
     const conta = await consultarConta(phone).catch(() => "");
     const waCliente = `https://wa.me/${phone}`;
+    const conversa = transcript && transcript.length ? formatTranscript(transcript) : "";
     const msg =
       `🆘 *Suporte BarberZap — pediram atendente humano*\n` +
       `Canal: ${canal}\n` +
@@ -83,6 +103,7 @@ async function notifyHuman(
       (conta ? `Conta: ${conta}\n` : "") +
       (motivo ? `Motivo: ${motivo}\n` : "") +
       (resumo ? `Resumo: ${resumo}\n` : "") +
+      (conversa ? `\n💬 *Conversa com a IA:*\n${conversa}\n` : "") +
       `\n👉 Falar com o cliente: ${waCliente}`;
     await sendText(HUMAN_NOTIFY_NUMBER, msg);
     console.log(`[suporte] aviso humano enviado p/ ${HUMAN_NOTIFY_NUMBER} (canal=${canal})`);
@@ -172,7 +193,13 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel): Promise<v
     // Se a IA pediu transferência: pausa + avisa o humano no 11937597009
     if (transfer) {
       await setPause(phone);
-      await notifyHuman(phone, ch.clientName, motivo, resumo, ch.name);
+      // Transcript = histórico anterior + a troca atual (pergunta do cliente + resposta da Bia)
+      const transcript: { role: string; content: string }[] = [
+        ...history,
+        { role: "user", content: fullMessage },
+        { role: "assistant", content: reply },
+      ];
+      await notifyHuman(phone, ch.clientName, motivo, resumo, ch.name, transcript);
       console.log(`[suporte] transferência → pausa + aviso humano (${phone}, canal=${ch.name})`);
     }
   } catch (err) {
