@@ -45,12 +45,12 @@ requireEnv([
   "AGENT_LOOKUP_SECRET",
 ]);
 
-const ACTIVATION_PHRASE = normalize(process.env.ACTIVATION_PHRASE ?? "preciso de ajuda com o barberzap");
+const ACTIVATION_PHRASE = normalize(process.env.ACTIVATION_PHRASE ?? "Olá preciso de ajuda!");
 
 // Botão da notificação oficial (Cloud API): payload/atalho que ativa a Bia.
 const ACTIVATION_PAYLOAD = (process.env.SUPPORT_ACTIVATION_PAYLOAD ?? "SUPORTE_IA").toLowerCase();
 // Frase canônica: qualquer clique no botão de suporte vira esta frase → ativa.
-const ACTIVATION_CANONICAL = process.env.ACTIVATION_CANONICAL ?? "Olá! Preciso de ajuda com o BarberZap.";
+const ACTIVATION_CANONICAL = process.env.ACTIVATION_CANONICAL ?? "Olá preciso de ajuda!";
 // Número (com DDI) que recebe o aviso quando a IA transfere para humano.
 const HUMAN_NOTIFY_NUMBER = (process.env.HUMAN_NOTIFY_NUMBER ?? "5511937597009").replace(/\D/g, "");
 
