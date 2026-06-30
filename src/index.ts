@@ -2,6 +2,8 @@ import "dotenv/config";
 import Fastify from "fastify";
 import { runAgent, type UserCtx } from "./agent";
 import { sendText, sendPresence } from "./services/evolution";
+import { metaSendText, metaVerifyToken, metaConfigured } from "./services/meta";
+import { consultarConta } from "./tools/contaLookup";
 import {
   getHistory,
   appendMessages,
@@ -45,7 +47,49 @@ requireEnv([
 
 const ACTIVATION_PHRASE = normalize(process.env.ACTIVATION_PHRASE ?? "preciso de ajuda com o barberzap");
 
+// Botão da notificação oficial (Cloud API): payload/atalho que ativa a Bia.
+const ACTIVATION_PAYLOAD = (process.env.SUPPORT_ACTIVATION_PAYLOAD ?? "SUPORTE_IA").toLowerCase();
+// Frase canônica: qualquer clique no botão de suporte vira esta frase → ativa.
+const ACTIVATION_CANONICAL = process.env.ACTIVATION_CANONICAL ?? "Olá! Preciso de ajuda com o BarberZap.";
+// Número (com DDI) que recebe o aviso quando a IA transfere para humano.
+const HUMAN_NOTIFY_NUMBER = (process.env.HUMAN_NOTIFY_NUMBER ?? "5511937597009").replace(/\D/g, "");
+
 const app = Fastify({ logger: { level: "info" } });
+
+// Abstração de canal: a mesma Bia responde via Evolution OU Cloud API oficial.
+interface Channel {
+  name: "evolution" | "meta";
+  clientName?: string;
+  send: (text: string) => Promise<void>;
+  presence?: (durationMs: number) => Promise<void>;
+}
+
+// Aviso ao atendente humano (11937597009) via Evolution, ao transferir.
+async function notifyHuman(
+  phone: string,
+  clientName: string | undefined,
+  motivo: string | undefined,
+  resumo: string | undefined,
+  canal: string,
+): Promise<void> {
+  try {
+    const conta = await consultarConta(phone).catch(() => "");
+    const waCliente = `https://wa.me/${phone}`;
+    const msg =
+      `🆘 *Suporte BarberZap — pediram atendente humano*\n` +
+      `Canal: ${canal}\n` +
+      (clientName ? `Nome: ${clientName}\n` : "") +
+      `WhatsApp: +${phone}\n` +
+      (conta ? `Conta: ${conta}\n` : "") +
+      (motivo ? `Motivo: ${motivo}\n` : "") +
+      (resumo ? `Resumo: ${resumo}\n` : "") +
+      `\n👉 Falar com o cliente: ${waCliente}`;
+    await sendText(HUMAN_NOTIFY_NUMBER, msg);
+    console.log(`[suporte] aviso humano enviado p/ ${HUMAN_NOTIFY_NUMBER} (canal=${canal})`);
+  } catch (err) {
+    console.error("[suporte] falha ao avisar humano:", err);
+  }
+}
 
 function normalize(s: string): string {
   return (s || "")
@@ -79,14 +123,14 @@ function splitMessage(text: string, maxLen = 3500): string[] {
   return chunks;
 }
 
-async function handleMessage(ctx: UserCtx, text: string): Promise<void> {
-  const { jid, phone } = ctx;
+async function handleMessage(ctx: UserCtx, text: string, ch: Channel): Promise<void> {
+  const { phone } = ctx;
   const trimmed = text.trim();
   if (!trimmed) return;
 
   if (trimmed.toLowerCase() === "/limpar") {
     await clearHistory(phone);
-    await sendText(jid, "✅ Conversa reiniciada!");
+    await ch.send("✅ Conversa reiniciada!");
     return;
   }
 
@@ -108,31 +152,32 @@ async function handleMessage(ctx: UserCtx, text: string): Promise<void> {
     if (pending.length === 0) return;
     const fullMessage = pending.join("\n");
 
-    await sendPresence(jid, 2000);
+    if (ch.presence) await ch.presence(2000);
 
     const history = await getHistory(phone);
-    const { text: reply, transfer } = await runAgent(ctx, history, fullMessage);
+    const { text: reply, transfer, motivo, resumo } = await runAgent(ctx, history, fullMessage);
 
     await appendMessages(phone, [
       { role: "user", content: fullMessage },
       { role: "assistant", content: reply },
     ]);
 
-    // Marca eco + anti-loop ANTES de enviar
+    // Marca eco + anti-loop ANTES de enviar (relevante p/ Evolution)
     const normalizedReply = normalize(reply);
     await setBotEcho(phone, normalizedReply);
     await setSentText(phone, normalizedReply);
 
-    for (const chunk of splitMessage(reply)) await sendText(jid, chunk);
+    for (const chunk of splitMessage(reply)) await ch.send(chunk);
 
-    // Se a IA pediu transferência, pausa para o humano assumir
+    // Se a IA pediu transferência: pausa + avisa o humano no 11937597009
     if (transfer) {
       await setPause(phone);
-      console.log(`[suporte] transferência → pausa para ${phone}`);
+      await notifyHuman(phone, ch.clientName, motivo, resumo, ch.name);
+      console.log(`[suporte] transferência → pausa + aviso humano (${phone}, canal=${ch.name})`);
     }
   } catch (err) {
     console.error("[suporte] erro ao processar mensagem:", err);
-    await sendText(jid, "Desculpa, tive um probleminha aqui 😅 Pode tentar de novo?");
+    await ch.send("Desculpa, tive um probleminha aqui 😅 Pode tentar de novo?");
   } finally {
     await releaseLock(phone);
   }
@@ -233,9 +278,101 @@ app.post("/webhook", async (request, reply) => {
   }
 
   const ctx: UserCtx = { jid: rawJid, phone };
+  const pushName = String((data as Record<string, unknown>)?.pushName ?? "");
+  const ch: Channel = {
+    name: "evolution",
+    clientName: pushName,
+    send: (t) => sendText(rawJid, t),
+    presence: (ms) => sendPresence(rawJid, ms),
+  };
   setImmediate(() => {
-    handleMessage(ctx, text).catch((err) => console.error("[suporte] erro inesperado:", err));
+    handleMessage(ctx, text, ch).catch((err) => console.error("[suporte] erro inesperado:", err));
   });
+
+  return ok200();
+});
+
+// ── Webhook da Cloud API oficial (Meta) ────────────────────────────────
+// Verificação do webhook (handshake GET hub.challenge).
+app.get("/webhook/meta", async (request, reply) => {
+  const q = request.query as Record<string, string>;
+  const mode = q["hub.mode"];
+  const token = q["hub.verify_token"];
+  const challenge = q["hub.challenge"];
+  if (mode === "subscribe" && token && token === metaVerifyToken()) {
+    return reply.code(200).send(challenge ?? "");
+  }
+  return reply.code(403).send("forbidden");
+});
+
+// Recebe mensagens da Cloud API e responde com a mesma Bia.
+app.post("/webhook/meta", async (request, reply) => {
+  const ok200 = () => reply.code(200).send({ ok: true });
+  const body = request.body as Record<string, any>;
+  if (!Array.isArray(body?.entry)) return ok200();
+
+  try {
+    for (const entry of body.entry ?? []) {
+      for (const change of entry.changes ?? []) {
+        const value = change.value ?? {};
+        // Ignora eventos de status (sent/delivered/read) — só tratamos mensagens.
+        if (!Array.isArray(value.messages)) continue;
+        const contacts: any[] = value.contacts ?? [];
+
+        for (const m of value.messages) {
+          const from = String(m.from ?? "");
+          if (!from) continue;
+          const phone = from.replace(/\D/g, "");
+          if (!phone) continue;
+          const clientName = contacts.find((c) => c.wa_id === from)?.profile?.name ?? "";
+
+          // Extrai texto / detecta clique no botão de suporte
+          let text = "";
+          if (m.type === "text") {
+            text = m.text?.body ?? "";
+          } else if (m.type === "button") {
+            const payload = String(m.button?.payload ?? "").toLowerCase();
+            const btext = m.button?.text ?? "";
+            text = (payload === ACTIVATION_PAYLOAD || /ajuda|suporte/.test(normalize(btext)))
+              ? ACTIVATION_CANONICAL : btext;
+          } else if (m.type === "interactive") {
+            const br = m.interactive?.button_reply ?? m.interactive?.list_reply ?? {};
+            const id = String(br.id ?? "").toLowerCase();
+            const title = br.title ?? "";
+            text = (id === ACTIVATION_PAYLOAD || /ajuda|suporte/.test(normalize(title)))
+              ? ACTIVATION_CANONICAL : title;
+          } else {
+            continue; // mídia/outros tipos: ignora por enquanto
+          }
+          if (!text.trim()) continue;
+
+          // Gating de ativação (Cloud API não tem fromMe/eco)
+          if (await isPaused(phone)) continue;
+          const active = await isActive(phone);
+          if (!active) {
+            if (!normalize(text).includes(ACTIVATION_PHRASE)) continue;
+            await setActive(phone);
+            console.log(`[suporte][meta] sessão ativada para ${phone}`);
+          } else {
+            await setActive(phone);
+          }
+          if (!(await checkRateLimit(phone))) continue;
+
+          const ctx: UserCtx = { jid: from, phone };
+          const ch: Channel = {
+            name: "meta",
+            clientName,
+            send: (t) => metaSendText(from, t),
+          };
+          setImmediate(() => {
+            handleMessage(ctx, text, ch).catch((err) => console.error("[suporte][meta] erro:", err));
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[suporte][meta] erro no webhook:", err);
+  }
 
   return ok200();
 });
@@ -252,5 +389,8 @@ app.get("/health", async (_req, reply) => {
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 app.listen({ port: PORT, host: "0.0.0.0" }).then(() => {
-  console.log(`[suporte] 💈 Agente de suporte BarberZap na porta ${PORT} (memória: ${storeBackend})`);
+  console.log(
+    `[suporte] 💈 Agente de suporte BarberZap na porta ${PORT} ` +
+    `(memória: ${storeBackend} | Cloud API: ${metaConfigured() ? "configurada" : "off"} | aviso humano: ${HUMAN_NOTIFY_NUMBER})`,
+  );
 });

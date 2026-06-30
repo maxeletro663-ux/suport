@@ -47,7 +47,7 @@ Você foi acionada pelo botão "Quero ajuda" do app e conversa com o usuário pe
 Para personalizar (ex.: dizer quantos dias faltam no teste, ou que a mensalidade venceu), CHAME a ferramenta consultar_conta. Ela usa o número de WhatsApp de quem fala — não peça CPF nem dados de login. Se não encontrar pelo número, peça gentilmente o e-mail de cadastro e chame de novo com "email". Nunca invente esses dados.
 
 # TRANSFERIR PARA HUMANO
-Chame a ferramenta transferir_para_humano quando: o usuário pedir uma pessoa/atendente; você tentar 2 vezes e ele não resolver; houver frustração/urgência; ou o tema for sensível (cobrança/financeiro, reembolso, cancelamento, conta bloqueada, suspeita de fraude, bug crítico, perda de dados, jurídico/LGPD), ou algo fora da sua base. Ao transferir, um atendente humano assume a conversa NESTE MESMO WhatsApp. Antes de chamar, avise: "Vou te transferir para um atendente humano, só um instante."
+Chame a ferramenta transferir_para_humano quando: o usuário pedir uma pessoa/atendente; você tentar 2 vezes e ele não resolver; houver frustração/urgência; ou o tema for sensível (cobrança/financeiro, reembolso, cancelamento, conta bloqueada, suspeita de fraude, bug crítico, perda de dados, jurídico/LGPD), ou algo fora da sua base. Ao transferir, nossa equipe é avisada e um atendente humano dá sequência ao atendimento. Antes de chamar, avise: "Vou te passar para um atendente humano, só um instante."
 
 # BASE DE CONHECIMENTO
 
@@ -113,6 +113,9 @@ COMISSÃO: Pagamentos → ver valor por profissional → registrar pagamento tot
 # FECHAMENTO
 Ajude o usuário a dar o próximo passo. Se resolveu, pergunte se precisa de mais algo. Se não resolveu após 2 tentativas, ofereça o atendente humano e transfira.
 
+# PRIMEIRA RESPOSTA
+Na SUA PRIMEIRA mensagem da conversa, depois de já ajudar com a dúvida, avise discretamente no final (1 linha) que ele pode falar com uma pessoa quando quiser. Ex.: "E se preferir, posso te passar para um atendente humano a qualquer momento, é só pedir 🙂". Não repita esse aviso nas mensagens seguintes.
+
 (Hoje é ${hoje}.)`;
 }
 
@@ -146,13 +149,21 @@ const tools: Anthropic.Tool[] = [
 export interface AgentResult {
   text: string;
   transfer: boolean;
+  motivo?: string;
+  resumo?: string;
+}
+
+interface AgentFlags {
+  transfer: boolean;
+  motivo?: string;
+  resumo?: string;
 }
 
 async function executeTool(
   name: string,
   input: Record<string, unknown>,
   ctx: UserCtx,
-  flags: { transfer: boolean },
+  flags: AgentFlags,
 ): Promise<string> {
   if (name === "consultar_conta") {
     const email = input.email ? String(input.email).trim() : undefined;
@@ -160,6 +171,8 @@ async function executeTool(
   }
   if (name === "transferir_para_humano") {
     flags.transfer = true;
+    if (input.motivo) flags.motivo = String(input.motivo);
+    if (input.resumo) flags.resumo = String(input.resumo);
     return "TRANSFERENCIA_REGISTRADA: avise o cliente que um atendente humano vai assumir a conversa por aqui em instantes.";
   }
   return `Ferramenta desconhecida: ${name}`;
@@ -171,7 +184,7 @@ export async function runAgent(
   userMessage: string,
 ): Promise<AgentResult> {
   const system = systemPrompt();
-  const flags = { transfer: false };
+  const flags: AgentFlags = { transfer: false };
 
   const messages: Anthropic.MessageParam[] = [
     ...history.map((m) => ({ role: m.role, content: m.content })),
@@ -210,5 +223,5 @@ export async function runAgent(
   }
   if (!text.trim()) text = "Desculpe, pode repetir de outro jeito? Quero te ajudar. 😊";
 
-  return { text, transfer: flags.transfer };
+  return { text, transfer: flags.transfer, motivo: flags.motivo, resumo: flags.resumo };
 }
