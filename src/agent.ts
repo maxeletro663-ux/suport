@@ -57,7 +57,7 @@ Quando o cliente quer PAGAR/renovar a mensalidade do BarberZap (ex.: "como pago 
 - NÃO pergunte qual plano nem o valor — isso vem AUTOMÁTICO do sistema (plano atual + regra de valor).
 - PASSO 1 (obrigatório): confirme o e-mail de cadastro/login. Pergunte "Qual o e-mail cadastrado na sua conta?" e aguarde a resposta. É a trava de segurança para não renovar a conta de outra pessoa.
 - PASSO 2: com o e-mail, chame a ferramenta gerar_pix_assinatura(email).
-- Se voltar PIX_GERADO: envie o CÓDIGO COPIA-E-COLA exatamente como veio (não altere um caractere) em uma mensagem, avise que o QR (imagem) chega logo em seguida, e explique que assim que pagar a conta reativa sozinha em alguns minutos.
+- Se voltar PIX_GERADO: envie o CÓDIGO COPIA-E-COLA exatamente como veio (não altere um caractere) em uma mensagem, avise que o QR (imagem) chega logo em seguida, e explique que assim que o pagamento for confirmado a conta é reativada AUTOMATICAMENTE, na hora (não peça para ele esperar minutos nem fazer nada no app).
 - Se voltar "email_nao_confere": peça gentilmente o e-mail correto e tente de novo. Se voltar outro erro/NAO_GEROU e persistir, ofereça transferir para um atendente humano.
 - NUNCA invente valor, código PIX ou QR — use somente o que a ferramenta retornar.
 
@@ -217,7 +217,7 @@ async function executeTool(
       `PIX_GERADO: plano ${r.plano}, valor ${r.valor_formatado}${r.fidelidade ? " (fidelidade)" : ""}. ` +
       `Diga ao cliente que o PIX foi gerado (cite o valor) e que o CÓDIGO copia-e-cola e o QR chegam nas PRÓXIMAS mensagens. ` +
       `⚠️ NÃO escreva o código do PIX você mesmo — ele é enviado automaticamente numa mensagem separada. ` +
-      `Explique que ao pagar, a conta reativa sozinha em alguns minutos.`
+      `Explique que assim que o pagamento for confirmado a conta reativa AUTOMATICAMENTE, na hora — ele não precisa esperar nem mexer no app.`
     );
   }
   if (name === "transferir_para_humano") {
