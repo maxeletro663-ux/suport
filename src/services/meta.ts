@@ -35,6 +35,33 @@ export async function metaSendText(to: string, text: string): Promise<void> {
   }
 }
 
+// Baixa uma mídia recebida (ex.: áudio) pela Cloud API e devolve base64.
+// Fluxo: media_id -> GET metadados (url) -> GET binário (com Bearer) -> base64.
+export async function metaDownloadMedia(mediaId: string): Promise<string | null> {
+  const tok = token();
+  if (!mediaId || !tok) return null;
+  try {
+    const meta = await axios.get(
+      `https://graph.facebook.com/${API_VERSION}/${mediaId}`,
+      { headers: { Authorization: `Bearer ${tok}` }, timeout: 20_000 },
+    );
+    const url = meta.data?.url;
+    if (!url) {
+      console.error("[suporte][meta] mídia sem url:", meta.data);
+      return null;
+    }
+    const bin = await axios.get(url, {
+      headers: { Authorization: `Bearer ${tok}` },
+      responseType: "arraybuffer",
+      timeout: 30_000,
+    });
+    return Buffer.from(bin.data).toString("base64");
+  } catch (e: any) {
+    console.error("[suporte][meta] erro ao baixar mídia:", e?.response?.data ?? e?.message ?? e);
+    return null;
+  }
+}
+
 // Envia imagem via Cloud API: faz upload do base64 -> media id -> envia.
 export async function metaSendImage(to: string, base64: string, caption = ""): Promise<void> {
   const pid = phoneId();

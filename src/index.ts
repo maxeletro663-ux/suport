@@ -1,8 +1,9 @@
 import "dotenv/config";
 import Fastify from "fastify";
 import { runAgent, type UserCtx } from "./agent";
-import { sendText, sendPresence, sendImage, sendImageUrl } from "./services/evolution";
-import { metaSendText, metaSendImage, metaSendImageUrl, metaVerifyToken, metaConfigured } from "./services/meta";
+import { sendText, sendPresence, sendImage, sendImageUrl, getMediaBase64 } from "./services/evolution";
+import { metaSendText, metaSendImage, metaSendImageUrl, metaVerifyToken, metaConfigured, metaDownloadMedia } from "./services/meta";
+import { transcribeAudio, transcriptionConfigured } from "./services/audio";
 import { consultarConta } from "./tools/contaLookup";
 import {
   getHistory,
@@ -278,7 +279,7 @@ app.post("/webhook", async (request, reply) => {
   const phone = rawJid.replace(/@.*/, "").replace(/\D/g, "");
   if (!phone) return ok200();
 
-  const text = extractText(message);
+  let text = extractText(message);
 
   // ── Mensagem do PRÓPRIO número (fromMe): IA x humano ──
   if (fromMe) {
@@ -293,6 +294,25 @@ app.post("/webhook", async (request, reply) => {
       console.log(`[suporte] humano assumiu → pausa para ${phone}`);
     }
     return ok200();
+  }
+
+  // ── Áudio: transcreve (Groq Whisper) para a Bia entender ──
+  // Só quando já há atendimento ativo — áudio não ativa a sessão (a ativação
+  // depende da frase do botão "Quero ajuda").
+  if (!text && messageType === "audioMessage" && key?.id && (await isActive(phone))) {
+    if (transcriptionConfigured()) {
+      try {
+        const b64 = await getMediaBase64(String(key.id), rawJid);
+        if (b64) {
+          text = await transcribeAudio(b64);
+          console.log(`[suporte] áudio transcrito: "${text.slice(0, 60)}"`);
+        }
+      } catch (e) {
+        console.error("[suporte] erro ao transcrever áudio:", e);
+      }
+    }
+    // Se não deu para transcrever, o fallback de "texto vazio" logo abaixo
+    // pede gentilmente que escreva.
   }
 
   // ── Anti-loop: se o texto bate com algo que o bot enviou recentemente, é eco ──
@@ -409,8 +429,27 @@ app.post("/webhook/meta", async (request, reply) => {
             const title = br.title ?? "";
             text = (id === ACTIVATION_PAYLOAD || /ajuda|suporte/.test(normalize(title)))
               ? ACTIVATION_CANONICAL : title;
+          } else if (m.type === "audio") {
+            // Áudio só em atendimento ativo (não ativa a sessão) e sem pausa.
+            if (await isPaused(phone)) continue;
+            if (!(await isActive(phone))) continue;
+            const mediaId = String(m.audio?.id ?? "");
+            if (!mediaId || !transcriptionConfigured()) continue;
+            try {
+              const b64 = await metaDownloadMedia(mediaId);
+              if (b64) {
+                text = await transcribeAudio(b64);
+                console.log(`[suporte][meta] áudio transcrito: "${text.slice(0, 60)}"`);
+              }
+            } catch (e) {
+              console.error("[suporte][meta] erro ao transcrever áudio:", e);
+            }
+            if (!text.trim()) {
+              await metaSendText(from, "Não consegui entender o áudio 😅 Pode escrever sua dúvida?").catch(() => {});
+              continue;
+            }
           } else {
-            continue; // mídia/outros tipos: ignora por enquanto
+            continue; // outros tipos de mídia: ignora por enquanto
           }
           if (!text.trim()) continue;
 
