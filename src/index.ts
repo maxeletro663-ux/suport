@@ -205,17 +205,16 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel): Promise<v
       );
     }
 
-    // Se a IA pediu transferência: pausa + avisa o humano no 11937597009
+    // Se a IA pediu transferência: apenas AVISA a equipe (atendimento humano é
+    // em OUTRO número). NÃO pausa — a Bia continua atendendo normalmente aqui.
     if (transfer) {
-      await setPause(phone);
-      // Transcript = histórico anterior + a troca atual (pergunta do cliente + resposta da Bia)
       const transcript: { role: string; content: string }[] = [
         ...history,
         { role: "user", content: fullMessage },
         { role: "assistant", content: reply },
       ];
       await notifyHuman(phone, ch.clientName, motivo, resumo, ch.name, transcript);
-      console.log(`[suporte] transferência → pausa + aviso humano (${phone}, canal=${ch.name})`);
+      console.log(`[suporte] transferência → aviso humano (sem pausa) (${phone}, canal=${ch.name})`);
     }
   } catch (err) {
     console.error("[suporte] erro ao processar mensagem:", err);
