@@ -58,7 +58,7 @@ const HUMAN_NOTIFY_NUMBER = (process.env.HUMAN_NOTIFY_NUMBER ?? "5511937597009")
 const WELCOME_IMAGE_URL = process.env.WELCOME_IMAGE_URL
   ?? "https://app.appbarberzap.com.br/notificacoes/header-agendamento.jpg";
 const WELCOME_CAPTION = process.env.WELCOME_CAPTION
-  ?? "Oi! 👋 Eu sou a *Bia*, assistente virtual do BarberZap.\n\nEstou aqui pra te ajudar com qualquer dúvida sobre o app: agenda, clientes, financeiro, planos, pagamentos e mais. E se precisar, também te passo para um atendente humano.\n\nMe conta: como posso te ajudar hoje? 🙂";
+  ?? "Oi! 👋 Eu sou a *Bia*, assistente virtual do BarberZap. Posso te ajudar com:\n\n💳 *Pagar ou renovar sua assinatura* (aqui no chat, via PIX)\n📅 *Consultar quando seu plano vence*\n⚙️ *Funcionalidades do app* (como usar cada parte)\n🏷️ *Planos e valores*\n🛠️ *Informar um problema* (aviso nosso time pra te ajudar)\n❓ *Tirar suas dúvidas*\n\nÉ só me dizer o que você precisa. E se preferir, a qualquer momento te passo para um atendente humano. 🙂";
 
 const app = Fastify({ logger: { level: "info" } });
 
