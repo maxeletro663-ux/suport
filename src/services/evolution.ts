@@ -28,3 +28,16 @@ export async function sendPresence(jid: string, durationMs = 2000): Promise<void
     // não crítico
   }
 }
+
+// Envia uma imagem a partir de base64 (ex.: QR do PIX).
+export async function sendImage(jid: string, base64: string, caption = ""): Promise<void> {
+  const inst = INSTANCE();
+  await api.post(`/message/sendMedia/${inst}`, {
+    number: jid,
+    mediatype: "image",
+    mimetype: "image/png",
+    media: base64,
+    fileName: "pix-qr.png",
+    caption,
+  });
+}

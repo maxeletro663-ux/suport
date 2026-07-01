@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { consultarConta } from "./tools/contaLookup";
+import { gerarPixAssinatura } from "./tools/pixAssinatura";
 import { withRetry } from "./services/retry";
 import type { ChatMessage } from "./services/store";
 
@@ -48,6 +49,16 @@ Para personalizar (ex.: dizer quantos dias faltam no teste, ou que a mensalidade
 
 # TRANSFERIR PARA HUMANO
 Chame a ferramenta transferir_para_humano quando: o usuário pedir uma pessoa/atendente; você tentar 2 vezes e ele não resolver; houver frustração/urgência; ou o tema for sensível (cobrança/financeiro, reembolso, cancelamento, conta bloqueada, suspeita de fraude, bug crítico, perda de dados, jurídico/LGPD), ou algo fora da sua base. Ao transferir, nossa equipe é avisada e um atendente humano dá sequência ao atendimento. Antes de chamar, avise: "Vou te passar para um atendente humano, só um instante."
+
+# PAGAR A ASSINATURA DO APP (PIX NO CHAT)
+Quando o cliente quer PAGAR/renovar a mensalidade do BarberZap (ex.: "como pago o app?", "quero pagar", "quero regularizar", teste expirado, mensalidade vencida):
+- NÃO mande ele mexer no app para pagar — muitas vezes a conta está bloqueada e ele não consegue navegar. Resolva AQUI, no chat.
+- NÃO pergunte qual plano nem o valor — isso vem AUTOMÁTICO do sistema (plano atual + regra de valor).
+- PASSO 1 (obrigatório): confirme o e-mail de cadastro/login. Pergunte "Qual o e-mail cadastrado na sua conta?" e aguarde a resposta. É a trava de segurança para não renovar a conta de outra pessoa.
+- PASSO 2: com o e-mail, chame a ferramenta gerar_pix_assinatura(email).
+- Se voltar PIX_GERADO: envie o CÓDIGO COPIA-E-COLA exatamente como veio (não altere um caractere) em uma mensagem, avise que o QR (imagem) chega logo em seguida, e explique que assim que pagar a conta reativa sozinha em alguns minutos.
+- Se voltar "email_nao_confere": peça gentilmente o e-mail correto e tente de novo. Se voltar outro erro/NAO_GEROU e persistir, ofereça transferir para um atendente humano.
+- NUNCA invente valor, código PIX ou QR — use somente o que a ferramenta retornar.
 
 # BASE DE CONHECIMENTO
 
@@ -132,6 +143,18 @@ const tools: Anthropic.Tool[] = [
     },
   },
   {
+    name: "gerar_pix_assinatura",
+    description:
+      "Gera um PIX para o cliente PAGAR/RENOVAR a assinatura do BarberZap (mensalidade do app), direto no chat. Use quando o cliente quer pagar o app / regularizar a conta / está com teste expirado ou mensalidade vencida e pede como pagar. O plano e o valor vêm AUTOMÁTICO do sistema — NÃO pergunte plano nem valor. É OBRIGATÓRIO confirmar o e-mail de cadastro do cliente antes de chamar (parâmetro email). Ao gerar, o código copia-e-cola volta no resultado e a imagem do QR é enviada automaticamente. Quando o cliente pagar, a conta é reativada sozinha.",
+    input_schema: {
+      type: "object",
+      required: ["email"],
+      properties: {
+        email: { type: "string", description: "E-mail de cadastro/login do cliente, confirmado por ele nesta conversa. Serve de trava para não renovar a conta de outra pessoa." },
+      },
+    },
+  },
+  {
     name: "transferir_para_humano",
     description:
       "Aciona quando o usuário pede falar com uma pessoa/atendente, está frustrado, você não resolveu após 2 tentativas, ou o tema é sensível (cobrança/financeiro, reembolso, cancelamento, conta bloqueada, fraude, bug crítico, perda de dados, jurídico) ou fora da sua base. Ao chamar, o atendimento por IA é pausado e um atendente humano assume a conversa neste mesmo WhatsApp.",
@@ -151,12 +174,15 @@ export interface AgentResult {
   transfer: boolean;
   motivo?: string;
   resumo?: string;
+  pixImage?: { base64: string; caption?: string };
 }
 
 interface AgentFlags {
   transfer: boolean;
   motivo?: string;
   resumo?: string;
+  pixImageBase64?: string;
+  pixCaption?: string;
 }
 
 async function executeTool(
@@ -168,6 +194,25 @@ async function executeTool(
   if (name === "consultar_conta") {
     const email = input.email ? String(input.email).trim() : undefined;
     return consultarConta(ctx.phone, email);
+  }
+  if (name === "gerar_pix_assinatura") {
+    const email = String(input.email || "").trim();
+    if (!email) return "FALTA_EMAIL: peça o e-mail de cadastro do cliente e confirme antes de gerar o PIX.";
+    const r = await gerarPixAssinatura(ctx.phone, email);
+    if (!r.ok || !r.qr_code) {
+      return `NAO_GEROU: ${r.message || r.error || "não foi possível gerar"}. Explique ao cliente com gentileza e, se necessário, ofereça transferir para um atendente.`;
+    }
+    // Guarda o QR (imagem) para envio automático após a mensagem de texto.
+    if (r.qr_code_base64) {
+      flags.pixImageBase64 = r.qr_code_base64;
+      flags.pixCaption = `QR do PIX — ${r.valor_formatado ?? ""}`.trim();
+    }
+    return (
+      `PIX_GERADO: plano ${r.plano}, valor ${r.valor_formatado}${r.fidelidade ? " (fidelidade)" : ""}.\n` +
+      `Envie ao cliente, em texto, o CÓDIGO COPIA-E-COLA abaixo (exatamente, sem alterar) e avise que o QR (imagem) chega em seguida. ` +
+      `Explique que assim que pagar, a conta é reativada automaticamente em alguns minutos.\n\n` +
+      `CODIGO_COPIA_E_COLA:\n${r.qr_code}`
+    );
   }
   if (name === "transferir_para_humano") {
     flags.transfer = true;
@@ -223,5 +268,11 @@ export async function runAgent(
   }
   if (!text.trim()) text = "Desculpe, pode repetir de outro jeito? Quero te ajudar. 😊";
 
-  return { text, transfer: flags.transfer, motivo: flags.motivo, resumo: flags.resumo };
+  return {
+    text,
+    transfer: flags.transfer,
+    motivo: flags.motivo,
+    resumo: flags.resumo,
+    pixImage: flags.pixImageBase64 ? { base64: flags.pixImageBase64, caption: flags.pixCaption } : undefined,
+  };
 }

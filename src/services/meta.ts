@@ -34,3 +34,47 @@ export async function metaSendText(to: string, text: string): Promise<void> {
     console.error("[suporte][meta] erro no envio:", e?.response?.data ?? e?.message ?? e);
   }
 }
+
+// Envia imagem via Cloud API: faz upload do base64 -> media id -> envia.
+export async function metaSendImage(to: string, base64: string, caption = ""): Promise<void> {
+  const pid = phoneId();
+  const tok = token();
+  if (!pid || !tok) {
+    console.warn("[suporte][meta] envio de imagem pulado — faltam credenciais");
+    return;
+  }
+  try {
+    // 1) upload da mídia
+    const bytes = Buffer.from(base64, "base64");
+    const form = new FormData();
+    form.append("messaging_product", "whatsapp");
+    form.append("type", "image/png");
+    form.append("file", new Blob([bytes], { type: "image/png" }), "pix-qr.png");
+
+    const up = await axios.post(
+      `https://graph.facebook.com/${API_VERSION}/${pid}/media`,
+      form,
+      { headers: { Authorization: `Bearer ${tok}` }, timeout: 30_000 },
+    );
+    const mediaId = up.data?.id;
+    if (!mediaId) {
+      console.error("[suporte][meta] upload sem media id:", up.data);
+      return;
+    }
+
+    // 2) envia a imagem pelo media id
+    await axios.post(
+      `https://graph.facebook.com/${API_VERSION}/${pid}/messages`,
+      {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "image",
+        image: { id: mediaId, caption },
+      },
+      { headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, timeout: 30_000 },
+    );
+  } catch (e: any) {
+    console.error("[suporte][meta] erro no envio de imagem:", e?.response?.data ?? e?.message ?? e);
+  }
+}

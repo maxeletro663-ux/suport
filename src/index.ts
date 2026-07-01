@@ -1,8 +1,8 @@
 import "dotenv/config";
 import Fastify from "fastify";
 import { runAgent, type UserCtx } from "./agent";
-import { sendText, sendPresence } from "./services/evolution";
-import { metaSendText, metaVerifyToken, metaConfigured } from "./services/meta";
+import { sendText, sendPresence, sendImage } from "./services/evolution";
+import { metaSendText, metaSendImage, metaVerifyToken, metaConfigured } from "./services/meta";
 import { consultarConta } from "./tools/contaLookup";
 import {
   getHistory,
@@ -61,6 +61,7 @@ interface Channel {
   name: "evolution" | "meta";
   clientName?: string;
   send: (text: string) => Promise<void>;
+  sendImage?: (base64: string, caption?: string) => Promise<void>;
   presence?: (durationMs: number) => Promise<void>;
 }
 
@@ -176,7 +177,7 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel): Promise<v
     if (ch.presence) await ch.presence(2000);
 
     const history = await getHistory(phone);
-    const { text: reply, transfer, motivo, resumo } = await runAgent(ctx, history, fullMessage);
+    const { text: reply, transfer, motivo, resumo, pixImage } = await runAgent(ctx, history, fullMessage);
 
     await appendMessages(phone, [
       { role: "user", content: fullMessage },
@@ -189,6 +190,13 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel): Promise<v
     await setSentText(phone, normalizedReply);
 
     for (const chunk of splitMessage(reply)) await ch.send(chunk);
+
+    // QR do PIX (imagem) — enviado logo após o texto com o copia-e-cola
+    if (pixImage?.base64 && ch.sendImage) {
+      await ch.sendImage(pixImage.base64, pixImage.caption).catch((e) =>
+        console.error("[suporte] falha ao enviar QR:", e),
+      );
+    }
 
     // Se a IA pediu transferência: pausa + avisa o humano no 11937597009
     if (transfer) {
@@ -310,6 +318,7 @@ app.post("/webhook", async (request, reply) => {
     name: "evolution",
     clientName: pushName,
     send: (t) => sendText(rawJid, t),
+    sendImage: (b64, cap) => sendImage(rawJid, b64, cap),
     presence: (ms) => sendPresence(rawJid, ms),
   };
   setImmediate(() => {
@@ -390,6 +399,7 @@ app.post("/webhook/meta", async (request, reply) => {
             name: "meta",
             clientName,
             send: (t) => metaSendText(from, t),
+            sendImage: (b64, cap) => metaSendImage(from, b64, cap),
           };
           setImmediate(() => {
             handleMessage(ctx, text, ch).catch((err) => console.error("[suporte][meta] erro:", err));
