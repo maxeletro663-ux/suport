@@ -41,3 +41,14 @@ export async function sendImage(jid: string, base64: string, caption = ""): Prom
     caption,
   });
 }
+
+// Envia uma imagem a partir de uma URL pública (ex.: banner de saudação).
+export async function sendImageUrl(jid: string, url: string, caption = ""): Promise<void> {
+  const inst = INSTANCE();
+  await api.post(`/message/sendMedia/${inst}`, {
+    number: jid,
+    mediatype: "image",
+    media: url,
+    caption,
+  });
+}

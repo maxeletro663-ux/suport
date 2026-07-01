@@ -78,3 +78,28 @@ export async function metaSendImage(to: string, base64: string, caption = ""): P
     console.error("[suporte][meta] erro no envio de imagem:", e?.response?.data ?? e?.message ?? e);
   }
 }
+
+// Envia imagem via Cloud API a partir de uma URL pública (sem upload).
+export async function metaSendImageUrl(to: string, url: string, caption = ""): Promise<void> {
+  const pid = phoneId();
+  const tok = token();
+  if (!pid || !tok) {
+    console.warn("[suporte][meta] envio de imagem (url) pulado — faltam credenciais");
+    return;
+  }
+  try {
+    await axios.post(
+      `https://graph.facebook.com/${API_VERSION}/${pid}/messages`,
+      {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "image",
+        image: { link: url, caption },
+      },
+      { headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, timeout: 30_000 },
+    );
+  } catch (e: any) {
+    console.error("[suporte][meta] erro no envio de imagem (url):", e?.response?.data ?? e?.message ?? e);
+  }
+}

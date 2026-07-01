@@ -1,8 +1,8 @@
 import "dotenv/config";
 import Fastify from "fastify";
 import { runAgent, type UserCtx } from "./agent";
-import { sendText, sendPresence, sendImage } from "./services/evolution";
-import { metaSendText, metaSendImage, metaVerifyToken, metaConfigured } from "./services/meta";
+import { sendText, sendPresence, sendImage, sendImageUrl } from "./services/evolution";
+import { metaSendText, metaSendImage, metaSendImageUrl, metaVerifyToken, metaConfigured } from "./services/meta";
 import { consultarConta } from "./tools/contaLookup";
 import {
   getHistory,
@@ -54,6 +54,12 @@ const ACTIVATION_CANONICAL = process.env.ACTIVATION_CANONICAL ?? "Olá preciso d
 // Número (com DDI) que recebe o aviso quando a IA transfere para humano.
 const HUMAN_NOTIFY_NUMBER = (process.env.HUMAN_NOTIFY_NUMBER ?? "5511937597009").replace(/\D/g, "");
 
+// Saudação de boas-vindas (imagem + legenda) no primeiro contato da sessão.
+const WELCOME_IMAGE_URL = process.env.WELCOME_IMAGE_URL
+  ?? "https://app.appbarberzap.com.br/notificacoes/header-agendamento.jpg";
+const WELCOME_CAPTION = process.env.WELCOME_CAPTION
+  ?? "Oi! 👋 Eu sou a *Bia*, assistente virtual do BarberZap.\n\nEstou aqui pra te ajudar com qualquer dúvida sobre o app: agenda, clientes, financeiro, planos, pagamentos e mais. E se precisar, também te passo para um atendente humano.\n\nMe conta: como posso te ajudar hoje? 🙂";
+
 const app = Fastify({ logger: { level: "info" } });
 
 // Abstração de canal: a mesma Bia responde via Evolution OU Cloud API oficial.
@@ -62,6 +68,7 @@ interface Channel {
   clientName?: string;
   send: (text: string) => Promise<void>;
   sendImage?: (base64: string, caption?: string) => Promise<void>;
+  sendImageUrl?: (url: string, caption?: string) => Promise<void>;
   presence?: (durationMs: number) => Promise<void>;
 }
 
@@ -145,7 +152,7 @@ function splitMessage(text: string, maxLen = 3500): string[] {
   return chunks;
 }
 
-async function handleMessage(ctx: UserCtx, text: string, ch: Channel): Promise<void> {
+async function handleMessage(ctx: UserCtx, text: string, ch: Channel, justActivated = false): Promise<void> {
   const { phone } = ctx;
   const trimmed = text.trim();
   if (!trimmed) return;
@@ -154,6 +161,22 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel): Promise<v
     await clearHistory(phone);
     await ch.send("✅ Conversa reiniciada!");
     return;
+  }
+
+  // Primeiro contato da sessão: saudação com banner + legenda.
+  if (justActivated && ch.sendImageUrl) {
+    await ch.sendImageUrl(WELCOME_IMAGE_URL, WELCOME_CAPTION).catch((e) =>
+      console.error("[suporte] falha ao enviar saudação:", e),
+    );
+    // Se a mensagem foi só a frase de ativação (sem dúvida real), a saudação basta.
+    const remainder = normalize(trimmed).replace(ACTIVATION_PHRASE, "").trim();
+    if (remainder.length < 6) {
+      await appendMessages(phone, [
+        { role: "user", content: trimmed },
+        { role: "assistant", content: "[saudação enviada]" },
+      ]);
+      return;
+    }
   }
 
   // Debounce: agrupa mensagens enviadas em rápida sucessão
@@ -302,12 +325,14 @@ app.post("/webhook", async (request, reply) => {
 
   // Trava de ativação: só começa com a frase do botão "Quero ajuda".
   const active = await isActive(phone);
+  let justActivated = false;
   if (!active) {
     if (!normalize(text).includes(ACTIVATION_PHRASE)) {
       // Número usado por humanos/sem ativação → ignora.
       return ok200();
     }
     await setActive(phone);
+    justActivated = true;
     console.log(`[suporte] sessão ativada para ${phone}`);
   } else {
     await setActive(phone); // renova TTL deslizante
@@ -325,10 +350,11 @@ app.post("/webhook", async (request, reply) => {
     clientName: pushName,
     send: (t) => sendText(rawJid, t),
     sendImage: (b64, cap) => sendImage(rawJid, b64, cap),
+    sendImageUrl: (url, cap) => sendImageUrl(rawJid, url, cap),
     presence: (ms) => sendPresence(rawJid, ms),
   };
   setImmediate(() => {
-    handleMessage(ctx, text, ch).catch((err) => console.error("[suporte] erro inesperado:", err));
+    handleMessage(ctx, text, ch, justActivated).catch((err) => console.error("[suporte] erro inesperado:", err));
   });
 
   return ok200();
@@ -391,9 +417,11 @@ app.post("/webhook/meta", async (request, reply) => {
           // Gating de ativação (Cloud API não tem fromMe/eco)
           if (await isPaused(phone)) continue;
           const active = await isActive(phone);
+          let justActivated = false;
           if (!active) {
             if (!normalize(text).includes(ACTIVATION_PHRASE)) continue;
             await setActive(phone);
+            justActivated = true;
             console.log(`[suporte][meta] sessão ativada para ${phone}`);
           } else {
             await setActive(phone);
@@ -406,9 +434,10 @@ app.post("/webhook/meta", async (request, reply) => {
             clientName,
             send: (t) => metaSendText(from, t),
             sendImage: (b64, cap) => metaSendImage(from, b64, cap),
+            sendImageUrl: (url, cap) => metaSendImageUrl(from, url, cap),
           };
           setImmediate(() => {
-            handleMessage(ctx, text, ch).catch((err) => console.error("[suporte][meta] erro:", err));
+            handleMessage(ctx, text, ch, justActivated).catch((err) => console.error("[suporte][meta] erro:", err));
           });
         }
       }
