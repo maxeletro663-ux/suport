@@ -174,6 +174,7 @@ export interface AgentResult {
   transfer: boolean;
   motivo?: string;
   resumo?: string;
+  pixCopiaCola?: string;
   pixImage?: { base64: string; caption?: string };
 }
 
@@ -181,6 +182,7 @@ interface AgentFlags {
   transfer: boolean;
   motivo?: string;
   resumo?: string;
+  pixCopiaCola?: string;
   pixImageBase64?: string;
   pixCaption?: string;
 }
@@ -202,16 +204,19 @@ async function executeTool(
     if (!r.ok || !r.qr_code) {
       return `NAO_GEROU: ${r.message || r.error || "não foi possível gerar"}. Explique ao cliente com gentileza e, se necessário, ofereça transferir para um atendente.`;
     }
-    // Guarda o QR (imagem) para envio automático após a mensagem de texto.
+    // O código copia-e-cola e o QR são enviados AUTOMATICAMENTE em mensagens
+    // próprias (não pelo modelo) — para o cliente copiar só o código e para
+    // NÃO haver erro de transcrição do código pela IA (que quebra o pagamento).
+    flags.pixCopiaCola = r.qr_code;
     if (r.qr_code_base64) {
       flags.pixImageBase64 = r.qr_code_base64;
       flags.pixCaption = `QR do PIX — ${r.valor_formatado ?? ""}`.trim();
     }
     return (
-      `PIX_GERADO: plano ${r.plano}, valor ${r.valor_formatado}${r.fidelidade ? " (fidelidade)" : ""}.\n` +
-      `Envie ao cliente, em texto, o CÓDIGO COPIA-E-COLA abaixo (exatamente, sem alterar) e avise que o QR (imagem) chega em seguida. ` +
-      `Explique que assim que pagar, a conta é reativada automaticamente em alguns minutos.\n\n` +
-      `CODIGO_COPIA_E_COLA:\n${r.qr_code}`
+      `PIX_GERADO: plano ${r.plano}, valor ${r.valor_formatado}${r.fidelidade ? " (fidelidade)" : ""}. ` +
+      `Diga ao cliente que o PIX foi gerado (cite o valor) e que o CÓDIGO copia-e-cola e o QR chegam nas PRÓXIMAS mensagens. ` +
+      `⚠️ NÃO escreva o código do PIX você mesmo — ele é enviado automaticamente numa mensagem separada. ` +
+      `Explique que ao pagar, a conta reativa sozinha em alguns minutos.`
     );
   }
   if (name === "transferir_para_humano") {
@@ -273,6 +278,7 @@ export async function runAgent(
     transfer: flags.transfer,
     motivo: flags.motivo,
     resumo: flags.resumo,
+    pixCopiaCola: flags.pixCopiaCola,
     pixImage: flags.pixImageBase64 ? { base64: flags.pixImageBase64, caption: flags.pixCaption } : undefined,
   };
 }

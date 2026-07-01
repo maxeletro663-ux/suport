@@ -177,21 +177,28 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel): Promise<v
     if (ch.presence) await ch.presence(2000);
 
     const history = await getHistory(phone);
-    const { text: reply, transfer, motivo, resumo, pixImage } = await runAgent(ctx, history, fullMessage);
+    const { text: reply, transfer, motivo, resumo, pixCopiaCola, pixImage } = await runAgent(ctx, history, fullMessage);
 
     await appendMessages(phone, [
       { role: "user", content: fullMessage },
       { role: "assistant", content: reply },
     ]);
 
-    // Marca eco + anti-loop ANTES de enviar (relevante p/ Evolution)
-    const normalizedReply = normalize(reply);
+    // Marca eco + anti-loop ANTES de enviar (relevante p/ Evolution).
+    // Inclui o código PIX no eco para o próprio envio não ser confundido com humano.
+    const normalizedReply = normalize(reply + (pixCopiaCola ? " " + pixCopiaCola : ""));
     await setBotEcho(phone, normalizedReply);
     await setSentText(phone, normalizedReply);
 
     for (const chunk of splitMessage(reply)) await ch.send(chunk);
 
-    // QR do PIX (imagem) — enviado logo após o texto com o copia-e-cola
+    // Código copia-e-cola em mensagem PRÓPRIA e CRUA (cliente copia só o código;
+    // não passa pela escrita da IA, evitando erro de transcrição que quebra o pagamento).
+    if (pixCopiaCola) {
+      await ch.send(pixCopiaCola);
+    }
+
+    // QR do PIX (imagem) — logo em seguida
     if (pixImage?.base64 && ch.sendImage) {
       await ch.sendImage(pixImage.base64, pixImage.caption).catch((e) =>
         console.error("[suporte] falha ao enviar QR:", e),
