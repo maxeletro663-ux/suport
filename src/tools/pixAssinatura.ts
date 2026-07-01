@@ -17,7 +17,11 @@ export interface PixResult {
   payment_id?: string;
 }
 
-export async function gerarPixAssinatura(phone: string, email: string): Promise<PixResult> {
+export async function gerarPixAssinatura(
+  phone: string,
+  email: string,
+  channel: "evolution" | "meta" = "evolution",
+): Promise<PixResult> {
   const base = process.env.BARBERZAP_API_URL;
   const secret = process.env.AGENT_LOOKUP_SECRET;
   if (!base || !secret) return { ok: false, message: "Erro de configuração (BARBERZAP_API_URL/AGENT_LOOKUP_SECRET)." };
@@ -25,7 +29,7 @@ export async function gerarPixAssinatura(phone: string, email: string): Promise<
   try {
     const res = await axios.post<PixResult>(
       `${base}/functions/v1/agent-subscription-pix?secret=${encodeURIComponent(secret)}`,
-      { phone, email },
+      { phone, email, channel },
       { headers: { "Content-Type": "application/json" }, timeout: 25_000 },
     );
     return res.data;

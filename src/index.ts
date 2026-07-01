@@ -319,7 +319,7 @@ app.post("/webhook", async (request, reply) => {
     return ok200();
   }
 
-  const ctx: UserCtx = { jid: rawJid, phone };
+  const ctx: UserCtx = { jid: rawJid, phone, channel: "evolution" };
   const pushName = String((data as Record<string, unknown>)?.pushName ?? "");
   const ch: Channel = {
     name: "evolution",
@@ -401,7 +401,7 @@ app.post("/webhook/meta", async (request, reply) => {
           }
           if (!(await checkRateLimit(phone))) continue;
 
-          const ctx: UserCtx = { jid: from, phone };
+          const ctx: UserCtx = { jid: from, phone, channel: "meta" };
           const ch: Channel = {
             name: "meta",
             clientName,
@@ -419,6 +419,38 @@ app.post("/webhook/meta", async (request, reply) => {
   }
 
   return ok200();
+});
+
+// Confirmação de pagamento — chamado pelo mp-webhook (só p/ PIX gerado pela IA).
+app.post("/pix-confirmado", async (request, reply) => {
+  const body = request.body as Record<string, any>;
+  const secret = process.env.AGENT_LOOKUP_SECRET;
+  if (!secret || body?.secret !== secret) {
+    return reply.code(401).send({ ok: false, error: "unauthorized" });
+  }
+
+  const phone = String(body?.phone ?? "").replace(/\D/g, "");
+  const channel = body?.channel === "meta" ? "meta" : "evolution";
+  if (!phone) return reply.code(400).send({ ok: false, error: "phone obrigatório" });
+
+  const msg =
+    `✅ *Pagamento confirmado!*\n\n` +
+    `Recebemos seu PIX e sua conta BarberZap já foi *reativada*. 🎉\n\n` +
+    `Já pode usar o app normalmente. Qualquer coisa, é só chamar. 😊`;
+
+  try {
+    if (channel === "meta") {
+      await metaSendText(phone, msg);
+    } else {
+      await sendText(phone, msg);
+    }
+    // Encerra a pausa de "humano" se houver — a conversa pode seguir normal.
+    console.log(`[suporte] confirmação de pagamento enviada (${channel}) p/ ${phone}`);
+    return reply.code(200).send({ ok: true });
+  } catch (err) {
+    console.error("[suporte] erro ao enviar confirmação de pagamento:", err);
+    return reply.code(200).send({ ok: false });
+  }
 });
 
 app.get("/health", async (_req, reply) => {

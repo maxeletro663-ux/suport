@@ -11,6 +11,7 @@ const MODEL = "claude-haiku-4-5-20251001";
 export interface UserCtx {
   jid: string;    // ex: 5511999999999@s.whatsapp.net
   phone: string;  // só dígitos, ex: 5511999999999
+  channel?: "evolution" | "meta"; // canal de origem (para confirmação pós-pagamento)
 }
 
 function systemPrompt(): string {
@@ -200,7 +201,7 @@ async function executeTool(
   if (name === "gerar_pix_assinatura") {
     const email = String(input.email || "").trim();
     if (!email) return "FALTA_EMAIL: peça o e-mail de cadastro do cliente e confirme antes de gerar o PIX.";
-    const r = await gerarPixAssinatura(ctx.phone, email);
+    const r = await gerarPixAssinatura(ctx.phone, email, ctx.channel ?? "evolution");
     if (!r.ok || !r.qr_code) {
       return `NAO_GEROU: ${r.message || r.error || "não foi possível gerar"}. Explique ao cliente com gentileza e, se necessário, ofereça transferir para um atendente.`;
     }
