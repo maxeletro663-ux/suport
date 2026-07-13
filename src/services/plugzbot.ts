@@ -54,6 +54,37 @@ export async function syncShouldRespond(conversationId: string | null): Promise<
   }
 }
 
+// Loga mídia recebida (imagem/vídeo/documento/figurinha) no inbox do PlugZBot.
+// A Bia não "vê" a mídia (sem visão) — isso é só pra visibilidade no inbox,
+// não aciona nenhuma resposta.
+export async function syncInboundMedia(
+  from: string,
+  type: "image" | "audio" | "video" | "document" | "sticker",
+  base64: string,
+  mime: string,
+  opts: { wamid?: string; filename?: string; profileName?: string } = {},
+): Promise<void> {
+  if (!plugzbotSyncConfigured()) return;
+  try {
+    const buffer = Buffer.from(base64, "base64");
+    const form = new FormData();
+    form.append("from", from);
+    if (opts.wamid) form.append("wamid", opts.wamid);
+    if (opts.profileName) form.append("profile_name", opts.profileName);
+    form.append("file", new Blob([buffer], { type: mime }), opts.filename || "media");
+    // Sem Content-Type manual aqui (nem via client(), que fixa application/json
+    // por padrão) — o axios define sozinho o boundary correto do multipart
+    // a partir do FormData, igual já funciona em metaSendImage.
+    await axios.post(`${BASE}/inbound-media?type=${type}`, form, {
+      headers: { "X-Sync-Token": TOKEN },
+      timeout: 20_000,
+      maxBodyLength: Infinity,
+    });
+  } catch (e: any) {
+    console.error("[suporte][plugzbot] falha ao sincronizar mídia inbound:", e?.response?.data ?? e?.message ?? e);
+  }
+}
+
 // Loga a resposta da Bia no inbox do PlugZBot.
 export async function syncOutbound(to: string, text: string, wamid?: string): Promise<void> {
   if (!plugzbotSyncConfigured()) return;

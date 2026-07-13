@@ -35,9 +35,9 @@ export async function metaSendText(to: string, text: string): Promise<void> {
   }
 }
 
-// Baixa uma mídia recebida (ex.: áudio) pela Cloud API e devolve base64.
-// Fluxo: media_id -> GET metadados (url) -> GET binário (com Bearer) -> base64.
-export async function metaDownloadMedia(mediaId: string): Promise<string | null> {
+// Baixa uma mídia recebida (áudio, imagem, vídeo, documento) pela Cloud API.
+// Fluxo: media_id -> GET metadados (url + mime_type) -> GET binário (com Bearer) -> base64.
+export async function metaDownloadMedia(mediaId: string): Promise<{ base64: string; mime: string } | null> {
   const tok = token();
   if (!mediaId || !tok) return null;
   try {
@@ -55,7 +55,10 @@ export async function metaDownloadMedia(mediaId: string): Promise<string | null>
       responseType: "arraybuffer",
       timeout: 30_000,
     });
-    return Buffer.from(bin.data).toString("base64");
+    return {
+      base64: Buffer.from(bin.data).toString("base64"),
+      mime: meta.data?.mime_type ?? "application/octet-stream",
+    };
   } catch (e: any) {
     console.error("[suporte][meta] erro ao baixar mídia:", e?.response?.data ?? e?.message ?? e);
     return null;

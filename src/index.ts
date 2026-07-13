@@ -5,7 +5,7 @@ import { sendText, sendPresence, sendImage, sendImageUrl, getMediaBase64 } from 
 import { metaSendText, metaSendImage, metaSendImageUrl, metaVerifyToken, metaConfigured, metaDownloadMedia } from "./services/meta";
 import { transcribeAudio, transcriptionConfigured } from "./services/audio";
 import { consultarConta } from "./tools/contaLookup";
-import { syncInbound, syncShouldRespond, syncOutbound } from "./services/plugzbot";
+import { syncInbound, syncInboundMedia, syncShouldRespond, syncOutbound } from "./services/plugzbot";
 import {
   getHistory,
   appendMessages,
@@ -454,9 +454,9 @@ async function processMetaMessage(
     const mediaId = String(m.audio?.id ?? "");
     if (!mediaId || !transcriptionConfigured()) return;
     try {
-      const b64 = await metaDownloadMedia(mediaId);
-      if (b64) {
-        text = await transcribeAudio(b64);
+      const downloaded = await metaDownloadMedia(mediaId);
+      if (downloaded) {
+        text = await transcribeAudio(downloaded.base64);
         console.log(`[suporte][meta] áudio transcrito: "${text.slice(0, 60)}"`);
       }
     } catch (e) {
@@ -466,6 +466,21 @@ async function processMetaMessage(
       await metaSendText(from, "Não consegui entender o áudio 😅 Pode escrever sua dúvida?").catch(() => {});
       return;
     }
+  } else if (m.type === "image" || m.type === "video" || m.type === "document" || m.type === "sticker") {
+    // A Bia não tem visão — só sincroniza a mídia pro inbox do PlugZBot pra
+    // um humano ver (sem responder nada por aqui).
+    const mediaId = String(m[m.type]?.id ?? "");
+    if (mediaId) {
+      const downloaded = await metaDownloadMedia(mediaId);
+      if (downloaded) {
+        syncInboundMedia(phone, m.type, downloaded.base64, downloaded.mime, {
+          wamid,
+          filename: m.document?.filename,
+          profileName: clientName,
+        }).catch((e) => console.error("[suporte][plugzbot] erro ao sincronizar mídia:", e));
+      }
+    }
+    return;
   } else {
     return; // outros tipos de mídia: ignora por enquanto
   }
