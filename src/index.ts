@@ -165,6 +165,9 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel, justActiva
   if (trimmed.toLowerCase() === "/limpar") {
     await clearHistory(phone);
     await ch.send("✅ Conversa reiniciada!");
+    if (ch.plugzbotConversationId !== undefined) {
+      await syncOutbound(phone, "✅ Conversa reiniciada!");
+    }
     return;
   }
 
@@ -173,6 +176,9 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel, justActiva
     await ch.sendImageUrl(WELCOME_IMAGE_URL, WELCOME_CAPTION).catch((e) =>
       console.error("[suporte] falha ao enviar saudação:", e),
     );
+    if (ch.plugzbotConversationId !== undefined) {
+      await syncOutbound(phone, WELCOME_CAPTION);
+    }
     // Se a mensagem foi só a frase de ativação (sem dúvida real), a saudação basta.
     const remainder = normalize(trimmed).replace(ACTIVATION_PHRASE, "").trim();
     if (remainder.length < 6) {
@@ -238,6 +244,9 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel, justActiva
     // não passa pela escrita da IA, evitando erro de transcrição que quebra o pagamento).
     if (pixCopiaCola) {
       await ch.send(pixCopiaCola);
+      if (ch.plugzbotConversationId !== undefined) {
+        await syncOutbound(phone, pixCopiaCola);
+      }
     }
 
     // QR do PIX (imagem) — logo em seguida
@@ -245,6 +254,9 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel, justActiva
       await ch.sendImage(pixImage.base64, pixImage.caption).catch((e) =>
         console.error("[suporte] falha ao enviar QR:", e),
       );
+      if (ch.plugzbotConversationId !== undefined) {
+        await syncOutbound(phone, pixImage.caption || "[QR code PIX]");
+      }
     }
 
     // Se a IA pediu transferência: apenas AVISA a equipe (atendimento humano é
