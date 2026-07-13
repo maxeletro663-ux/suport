@@ -5,6 +5,7 @@ import { sendText, sendPresence, sendImage, sendImageUrl, getMediaBase64 } from 
 import { metaSendText, metaSendImage, metaSendImageUrl, metaVerifyToken, metaConfigured, metaDownloadMedia } from "./services/meta";
 import { transcribeAudio, transcriptionConfigured } from "./services/audio";
 import { consultarConta } from "./tools/contaLookup";
+import { syncInbound, syncShouldRespond, syncOutbound } from "./services/plugzbot";
 import {
   getHistory,
   appendMessages,
@@ -71,6 +72,9 @@ interface Channel {
   sendImage?: (base64: string, caption?: string) => Promise<void>;
   sendImageUrl?: (url: string, caption?: string) => Promise<void>;
   presence?: (durationMs: number) => Promise<void>;
+  // Presente (mesmo que null) só no canal Meta — é o gate pra sincronizar
+  // com o inbox do PlugZBot (Evolution não tem conta correspondente lá).
+  plugzbotConversationId?: string | null;
 }
 
 // Monta um transcript curto da conversa (últimas trocas) para o atendente humano.
@@ -198,6 +202,16 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel, justActiva
     if (pending.length === 0) return;
     const fullMessage = pending.join("\n");
 
+    // Humano assumiu pelo inbox do PlugZBot → não responde (só registra o que chegou).
+    if (ch.plugzbotConversationId !== undefined) {
+      const shouldRespond = await syncShouldRespond(ch.plugzbotConversationId);
+      if (!shouldRespond) {
+        console.log(`[suporte] pausado via PlugZBot (humano no inbox) — ignorando ${phone}`);
+        await appendMessages(phone, [{ role: "user", content: fullMessage }]);
+        return;
+      }
+    }
+
     if (ch.presence) await ch.presence(2000);
 
     const history = await getHistory(phone);
@@ -215,6 +229,10 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel, justActiva
     await setSentText(phone, normalizedReply);
 
     for (const chunk of splitMessage(reply)) await ch.send(chunk);
+
+    if (ch.plugzbotConversationId !== undefined) {
+      await syncOutbound(phone, reply);
+    }
 
     // Código copia-e-cola em mensagem PRÓPRIA e CRUA (cliente copia só o código;
     // não passa pela escrita da IA, evitando erro de transcrição que quebra o pagamento).
@@ -393,6 +411,84 @@ app.get("/webhook/meta", async (request, reply) => {
   return reply.code(403).send("forbidden");
 });
 
+// Processa 1 mensagem recebida pela Cloud API (rodado via setImmediate — nunca
+// bloqueia o ack do webhook, mesmo com transcrição de áudio ou sync lento).
+async function processMetaMessage(
+  from: string,
+  phone: string,
+  clientName: string,
+  wamid: string | undefined,
+  m: Record<string, any>,
+): Promise<void> {
+  // Extrai texto / detecta clique no botão de suporte
+  let text = "";
+  if (m.type === "text") {
+    text = m.text?.body ?? "";
+  } else if (m.type === "button") {
+    const payload = String(m.button?.payload ?? "").toLowerCase();
+    const btext = m.button?.text ?? "";
+    text = (payload === ACTIVATION_PAYLOAD || /ajuda|suporte/.test(normalize(btext)))
+      ? ACTIVATION_CANONICAL : btext;
+  } else if (m.type === "interactive") {
+    const br = m.interactive?.button_reply ?? m.interactive?.list_reply ?? {};
+    const id = String(br.id ?? "").toLowerCase();
+    const title = br.title ?? "";
+    text = (id === ACTIVATION_PAYLOAD || /ajuda|suporte/.test(normalize(title)))
+      ? ACTIVATION_CANONICAL : title;
+  } else if (m.type === "audio") {
+    // Áudio só em atendimento ativo (não ativa a sessão) e sem pausa.
+    if (await isPaused(phone)) return;
+    if (!(await isActive(phone))) return;
+    const mediaId = String(m.audio?.id ?? "");
+    if (!mediaId || !transcriptionConfigured()) return;
+    try {
+      const b64 = await metaDownloadMedia(mediaId);
+      if (b64) {
+        text = await transcribeAudio(b64);
+        console.log(`[suporte][meta] áudio transcrito: "${text.slice(0, 60)}"`);
+      }
+    } catch (e) {
+      console.error("[suporte][meta] erro ao transcrever áudio:", e);
+    }
+    if (!text.trim()) {
+      await metaSendText(from, "Não consegui entender o áudio 😅 Pode escrever sua dúvida?").catch(() => {});
+      return;
+    }
+  } else {
+    return; // outros tipos de mídia: ignora por enquanto
+  }
+  if (!text.trim()) return;
+
+  // Sincroniza no inbox do PlugZBot — loga TODA mensagem de texto real que
+  // chega no número, independente de ativar a Bia ou não (visibilidade total).
+  const plugzbotConversationId = await syncInbound(phone, text, wamid, clientName);
+
+  // Gating de ativação (Cloud API não tem fromMe/eco)
+  if (await isPaused(phone)) return;
+  const active = await isActive(phone);
+  let justActivated = false;
+  if (!active) {
+    if (!normalize(text).includes(ACTIVATION_PHRASE)) return;
+    await setActive(phone);
+    justActivated = true;
+    console.log(`[suporte][meta] sessão ativada para ${phone}`);
+  } else {
+    await setActive(phone);
+  }
+  if (!(await checkRateLimit(phone))) return;
+
+  const ctx: UserCtx = { jid: from, phone, channel: "meta" };
+  const ch: Channel = {
+    name: "meta",
+    clientName,
+    send: (t) => metaSendText(from, t),
+    sendImage: (b64, cap) => metaSendImage(from, b64, cap),
+    sendImageUrl: (url, cap) => metaSendImageUrl(from, url, cap),
+    plugzbotConversationId,
+  };
+  await handleMessage(ctx, text, ch, justActivated);
+}
+
 // Recebe mensagens da Cloud API e responde com a mesma Bia.
 app.post("/webhook/meta", async (request, reply) => {
   const ok200 = () => reply.code(200).send({ ok: true });
@@ -413,70 +509,12 @@ app.post("/webhook/meta", async (request, reply) => {
           const phone = from.replace(/\D/g, "");
           if (!phone) continue;
           const clientName = contacts.find((c) => c.wa_id === from)?.profile?.name ?? "";
+          const wamid = m.id ? String(m.id) : undefined;
 
-          // Extrai texto / detecta clique no botão de suporte
-          let text = "";
-          if (m.type === "text") {
-            text = m.text?.body ?? "";
-          } else if (m.type === "button") {
-            const payload = String(m.button?.payload ?? "").toLowerCase();
-            const btext = m.button?.text ?? "";
-            text = (payload === ACTIVATION_PAYLOAD || /ajuda|suporte/.test(normalize(btext)))
-              ? ACTIVATION_CANONICAL : btext;
-          } else if (m.type === "interactive") {
-            const br = m.interactive?.button_reply ?? m.interactive?.list_reply ?? {};
-            const id = String(br.id ?? "").toLowerCase();
-            const title = br.title ?? "";
-            text = (id === ACTIVATION_PAYLOAD || /ajuda|suporte/.test(normalize(title)))
-              ? ACTIVATION_CANONICAL : title;
-          } else if (m.type === "audio") {
-            // Áudio só em atendimento ativo (não ativa a sessão) e sem pausa.
-            if (await isPaused(phone)) continue;
-            if (!(await isActive(phone))) continue;
-            const mediaId = String(m.audio?.id ?? "");
-            if (!mediaId || !transcriptionConfigured()) continue;
-            try {
-              const b64 = await metaDownloadMedia(mediaId);
-              if (b64) {
-                text = await transcribeAudio(b64);
-                console.log(`[suporte][meta] áudio transcrito: "${text.slice(0, 60)}"`);
-              }
-            } catch (e) {
-              console.error("[suporte][meta] erro ao transcrever áudio:", e);
-            }
-            if (!text.trim()) {
-              await metaSendText(from, "Não consegui entender o áudio 😅 Pode escrever sua dúvida?").catch(() => {});
-              continue;
-            }
-          } else {
-            continue; // outros tipos de mídia: ignora por enquanto
-          }
-          if (!text.trim()) continue;
-
-          // Gating de ativação (Cloud API não tem fromMe/eco)
-          if (await isPaused(phone)) continue;
-          const active = await isActive(phone);
-          let justActivated = false;
-          if (!active) {
-            if (!normalize(text).includes(ACTIVATION_PHRASE)) continue;
-            await setActive(phone);
-            justActivated = true;
-            console.log(`[suporte][meta] sessão ativada para ${phone}`);
-          } else {
-            await setActive(phone);
-          }
-          if (!(await checkRateLimit(phone))) continue;
-
-          const ctx: UserCtx = { jid: from, phone, channel: "meta" };
-          const ch: Channel = {
-            name: "meta",
-            clientName,
-            send: (t) => metaSendText(from, t),
-            sendImage: (b64, cap) => metaSendImage(from, b64, cap),
-            sendImageUrl: (url, cap) => metaSendImageUrl(from, url, cap),
-          };
           setImmediate(() => {
-            handleMessage(ctx, text, ch, justActivated).catch((err) => console.error("[suporte][meta] erro:", err));
+            processMetaMessage(from, phone, clientName, wamid, m).catch((err) =>
+              console.error("[suporte][meta] erro ao processar mensagem:", err),
+            );
           });
         }
       }
