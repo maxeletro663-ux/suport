@@ -457,25 +457,38 @@ async function processMetaMessage(
   } else {
     return; // outros tipos de mídia: ignora por enquanto
   }
-  if (!text.trim()) return;
+  if (!text.trim()) {
+    console.log(`[suporte][meta] mensagem sem texto útil (type=${m.type}) — ignorando`);
+    return;
+  }
+  console.log(`[suporte][meta] texto extraído de ${phone}: "${text.slice(0, 80)}"`);
 
   // Sincroniza no inbox do PlugZBot — loga TODA mensagem de texto real que
   // chega no número, independente de ativar a Bia ou não (visibilidade total).
   const plugzbotConversationId = await syncInbound(phone, text, wamid, clientName);
 
   // Gating de ativação (Cloud API não tem fromMe/eco)
-  if (await isPaused(phone)) return;
+  if (await isPaused(phone)) {
+    console.log(`[suporte][meta] ${phone} está pausado (humano assumiu) — ignorando`);
+    return;
+  }
   const active = await isActive(phone);
   let justActivated = false;
   if (!active) {
-    if (!normalize(text).includes(ACTIVATION_PHRASE)) return;
+    if (!normalize(text).includes(ACTIVATION_PHRASE)) {
+      console.log(`[suporte][meta] ${phone} sem sessão ativa e frase de ativação não bateu — ignorando`);
+      return;
+    }
     await setActive(phone);
     justActivated = true;
     console.log(`[suporte][meta] sessão ativada para ${phone}`);
   } else {
     await setActive(phone);
   }
-  if (!(await checkRateLimit(phone))) return;
+  if (!(await checkRateLimit(phone))) {
+    console.warn(`[suporte][meta] rate limit atingido para ${phone}`);
+    return;
+  }
 
   const ctx: UserCtx = { jid: from, phone, channel: "meta" };
   const ch: Channel = {
@@ -493,12 +506,16 @@ async function processMetaMessage(
 app.post("/webhook/meta", async (request, reply) => {
   const ok200 = () => reply.code(200).send({ ok: true });
   const body = request.body as Record<string, any>;
+  const entryCount = Array.isArray(body?.entry) ? body.entry.length : 0;
+  console.log(`[suporte][meta] webhook POST recebido — entries=${entryCount}`);
   if (!Array.isArray(body?.entry)) return ok200();
 
   try {
     for (const entry of body.entry ?? []) {
       for (const change of entry.changes ?? []) {
         const value = change.value ?? {};
+        const msgCount = Array.isArray(value.messages) ? value.messages.length : 0;
+        console.log(`[suporte][meta] change field=${change.field} messages=${msgCount} statuses=${Array.isArray(value.statuses) ? value.statuses.length : 0}`);
         // Ignora eventos de status (sent/delivered/read) — só tratamos mensagens.
         if (!Array.isArray(value.messages)) continue;
         const contacts: any[] = value.contacts ?? [];
