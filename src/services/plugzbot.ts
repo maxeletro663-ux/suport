@@ -94,3 +94,43 @@ export async function syncOutbound(to: string, text: string, wamid?: string): Pr
     console.error("[suporte][plugzbot] falha ao sincronizar outbound:", e?.response?.data ?? e?.message ?? e);
   }
 }
+
+// Loga mídia enviada pela Bia (saudação em imagem, QR do PIX etc.) no inbox
+// do PlugZBot — antes só a legenda em texto ia, a imagem em si nunca aparecia.
+export async function syncOutboundMedia(
+  to: string,
+  type: "image" | "audio" | "video" | "document" | "sticker",
+  base64: string,
+  mime: string,
+  opts: { wamid?: string; caption?: string; filename?: string } = {},
+): Promise<void> {
+  if (!plugzbotSyncConfigured()) return;
+  try {
+    const buffer = Buffer.from(base64, "base64");
+    const form = new FormData();
+    form.append("to", to);
+    if (opts.wamid) form.append("wamid", opts.wamid);
+    if (opts.caption) form.append("caption", opts.caption);
+    form.append("file", new Blob([buffer], { type: mime }), opts.filename || "media");
+    await axios.post(`${BASE}/outbound-media?type=${type}`, form, {
+      headers: { "X-Sync-Token": TOKEN },
+      timeout: 20_000,
+      maxBodyLength: Infinity,
+    });
+  } catch (e: any) {
+    console.error("[suporte][plugzbot] falha ao sincronizar mídia outbound:", e?.response?.data ?? e?.message ?? e);
+  }
+}
+
+// Baixa uma URL externa (ex.: banner de saudação, que a Bia manda direto por
+// URL pra Meta sem baixar localmente) em base64, só pra poder sincronizar.
+export async function fetchUrlAsBase64(url: string): Promise<{ base64: string; mime: string } | null> {
+  try {
+    const res = await axios.get(url, { responseType: "arraybuffer", timeout: 15_000 });
+    const mime = String(res.headers["content-type"] || "image/jpeg").split(";")[0].trim();
+    return { base64: Buffer.from(res.data).toString("base64"), mime };
+  } catch (e: any) {
+    console.error("[suporte][plugzbot] falha ao baixar URL pra sincronizar:", e?.message ?? e);
+    return null;
+  }
+}

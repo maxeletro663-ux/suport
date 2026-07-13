@@ -5,7 +5,14 @@ import { sendText, sendPresence, sendImage, sendImageUrl, getMediaBase64 } from 
 import { metaSendText, metaSendImage, metaSendImageUrl, metaVerifyToken, metaConfigured, metaDownloadMedia } from "./services/meta";
 import { transcribeAudio, transcriptionConfigured } from "./services/audio";
 import { consultarConta } from "./tools/contaLookup";
-import { syncInbound, syncInboundMedia, syncShouldRespond, syncOutbound } from "./services/plugzbot";
+import {
+  fetchUrlAsBase64,
+  syncInbound,
+  syncInboundMedia,
+  syncOutbound,
+  syncOutboundMedia,
+  syncShouldRespond,
+} from "./services/plugzbot";
 import {
   getHistory,
   appendMessages,
@@ -177,7 +184,12 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel, justActiva
       console.error("[suporte] falha ao enviar saudação:", e),
     );
     if (ch.plugzbotConversationId !== undefined) {
-      await syncOutbound(phone, WELCOME_CAPTION);
+      const downloaded = await fetchUrlAsBase64(WELCOME_IMAGE_URL);
+      if (downloaded) {
+        await syncOutboundMedia(phone, "image", downloaded.base64, downloaded.mime, { caption: WELCOME_CAPTION });
+      } else {
+        await syncOutbound(phone, WELCOME_CAPTION); // fallback: pelo menos o texto sincroniza
+      }
     }
     // Se a mensagem foi só a frase de ativação (sem dúvida real), a saudação basta.
     const remainder = normalize(trimmed).replace(ACTIVATION_PHRASE, "").trim();
@@ -255,7 +267,7 @@ async function handleMessage(ctx: UserCtx, text: string, ch: Channel, justActiva
         console.error("[suporte] falha ao enviar QR:", e),
       );
       if (ch.plugzbotConversationId !== undefined) {
-        await syncOutbound(phone, pixImage.caption || "[QR code PIX]");
+        await syncOutboundMedia(phone, "image", pixImage.base64, "image/png", { caption: pixImage.caption });
       }
     }
 
