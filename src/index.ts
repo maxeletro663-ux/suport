@@ -69,6 +69,12 @@ const WELCOME_IMAGE_URL = process.env.WELCOME_IMAGE_URL
 const WELCOME_CAPTION = process.env.WELCOME_CAPTION
   ?? "Oi! 👋 Eu sou a *Bia*, assistente virtual do BarberZap. Posso te ajudar com:\n\n💳 *Pagar ou renovar sua assinatura* (aqui no chat, via PIX)\n📅 *Consultar quando seu plano vence*\n⚙️ *Funcionalidades do app* (como usar cada parte)\n🏷️ *Planos e valores*\n🛠️ *Informar um problema* (aviso nosso time pra te ajudar)\n❓ *Tirar suas dúvidas*\n\nÉ só me dizer o que você precisa. E se preferir, a qualquer momento te passo para um atendente humano. 🙂";
 
+// Aviso automático (mesma imagem da saudação) quando alguém escreve pra este
+// número SEM a frase/botão de ativação — ex.: cliente de barbearia respondendo
+// a uma notificação, achando que está falando com a barbearia.
+const AUTO_NOTICE_CAPTION = process.env.AUTO_NOTICE_CAPTION
+  ?? "👋 Olá!\n🤖 Este é um número automático, utilizado apenas para enviar notificações da sua barbearia.\n\n💈 Para falar com a sua barbearia, clique no número de telefone informado na mensagem de confirmação do seu agendamento logo acima.\n\nObrigado! 😊\n✂️ *Equipe BarberZap*";
+
 const app = Fastify({ logger: { level: "info" } });
 
 // Abstração de canal: a mesma Bia responde via Evolution OU Cloud API oficial.
@@ -390,7 +396,12 @@ app.post("/webhook", async (request, reply) => {
   let justActivated = false;
   if (!active) {
     if (!normalize(text).includes(ACTIVATION_PHRASE)) {
-      // Número usado por humanos/sem ativação → ignora.
+      // Número usado por humanos/sem ativação → avisa que é número automático.
+      setImmediate(() =>
+        sendImageUrl(rawJid, WELCOME_IMAGE_URL, AUTO_NOTICE_CAPTION).catch((e) =>
+          console.error("[suporte] falha ao enviar aviso de número automático:", e),
+        ),
+      );
       return ok200();
     }
     await setActive(phone);
@@ -515,7 +526,10 @@ async function processMetaMessage(
   let justActivated = false;
   if (!active) {
     if (!normalize(text).includes(ACTIVATION_PHRASE)) {
-      console.log(`[suporte][meta] ${phone} sem sessão ativa e frase de ativação não bateu — ignorando`);
+      console.log(`[suporte][meta] ${phone} sem sessão ativa e frase de ativação não bateu — enviando aviso de número automático`);
+      await metaSendImageUrl(from, WELCOME_IMAGE_URL, AUTO_NOTICE_CAPTION).catch((e) =>
+        console.error("[suporte][meta] falha ao enviar aviso de número automático:", e),
+      );
       return;
     }
     await setActive(phone);
