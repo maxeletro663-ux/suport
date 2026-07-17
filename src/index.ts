@@ -29,6 +29,8 @@ import {
   getSentText,
   isActive,
   setActive,
+  wasAutoNoticeSentRecently,
+  markAutoNoticeSent,
   isPaused,
   setPause,
   setBotEcho,
@@ -396,12 +398,16 @@ app.post("/webhook", async (request, reply) => {
   let justActivated = false;
   if (!active) {
     if (!normalize(text).includes(ACTIVATION_PHRASE)) {
-      // Número usado por humanos/sem ativação → avisa que é número automático.
-      setImmediate(() =>
-        sendImageUrl(rawJid, WELCOME_IMAGE_URL, AUTO_NOTICE_CAPTION).catch((e) =>
-          console.error("[suporte] falha ao enviar aviso de número automático:", e),
-        ),
-      );
+      // Número usado por humanos/sem ativação → avisa que é número automático
+      // (no máximo 1x por hora, pra não repetir a cada mensagem).
+      if (!(await wasAutoNoticeSentRecently(phone))) {
+        await markAutoNoticeSent(phone);
+        setImmediate(() =>
+          sendImageUrl(rawJid, WELCOME_IMAGE_URL, AUTO_NOTICE_CAPTION).catch((e) =>
+            console.error("[suporte] falha ao enviar aviso de número automático:", e),
+          ),
+        );
+      }
       return ok200();
     }
     await setActive(phone);
@@ -526,10 +532,14 @@ async function processMetaMessage(
   let justActivated = false;
   if (!active) {
     if (!normalize(text).includes(ACTIVATION_PHRASE)) {
-      console.log(`[suporte][meta] ${phone} sem sessão ativa e frase de ativação não bateu — enviando aviso de número automático`);
-      await metaSendImageUrl(from, WELCOME_IMAGE_URL, AUTO_NOTICE_CAPTION).catch((e) =>
-        console.error("[suporte][meta] falha ao enviar aviso de número automático:", e),
-      );
+      // Idem: no máximo 1x por hora por número.
+      if (!(await wasAutoNoticeSentRecently(phone))) {
+        await markAutoNoticeSent(phone);
+        console.log(`[suporte][meta] ${phone} sem sessão ativa e frase de ativação não bateu — enviando aviso de número automático`);
+        await metaSendImageUrl(from, WELCOME_IMAGE_URL, AUTO_NOTICE_CAPTION).catch((e) =>
+          console.error("[suporte][meta] falha ao enviar aviso de número automático:", e),
+        );
+      }
       return;
     }
     await setActive(phone);

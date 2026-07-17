@@ -81,6 +81,17 @@ export async function setActive(phone: string): Promise<void> {
   else memSet(`sup:ativa:${phone}`, "1", SESSION_TTL);
 }
 
+// ── Aviso de número automático (evita repetir em menos de 1h) ─
+const AUTO_NOTICE_TTL = 60 * 60; // 1h
+export async function wasAutoNoticeSentRecently(phone: string): Promise<boolean> {
+  if (redis) return (await redis.exists(`sup:autonotice:${phone}`)) === 1;
+  return memGet(`sup:autonotice:${phone}`) === "1";
+}
+export async function markAutoNoticeSent(phone: string): Promise<void> {
+  if (redis) await redis.set(`sup:autonotice:${phone}`, "1", { ex: AUTO_NOTICE_TTL });
+  else memSet(`sup:autonotice:${phone}`, "1", AUTO_NOTICE_TTL);
+}
+
 // ── Pausa quando humano assume ──────────────────────────────
 export async function isPaused(phone: string): Promise<boolean> {
   if (redis) return (await redis.exists(`sup:pausa:${phone}`)) === 1;
