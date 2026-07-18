@@ -539,6 +539,16 @@ async function processMetaMessage(
         await metaSendImageUrl(from, WELCOME_IMAGE_URL, AUTO_NOTICE_CAPTION).catch((e) =>
           console.error("[suporte][meta] falha ao enviar aviso de número automático:", e),
         );
+        // Espelha no inbox do PlugZBot — antes só o inbound sincronizava, o
+        // aviso automático em si nunca aparecia lá.
+        if (plugzbotConversationId) {
+          const downloaded = await fetchUrlAsBase64(WELCOME_IMAGE_URL);
+          if (downloaded) {
+            await syncOutboundMedia(phone, "image", downloaded.base64, downloaded.mime, { caption: AUTO_NOTICE_CAPTION });
+          } else {
+            await syncOutbound(phone, AUTO_NOTICE_CAPTION);
+          }
+        }
       }
       return;
     }
