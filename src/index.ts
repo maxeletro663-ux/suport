@@ -399,14 +399,28 @@ app.post("/webhook", async (request, reply) => {
   if (!active) {
     if (!normalize(text).includes(ACTIVATION_PHRASE)) {
       // Número usado por humanos/sem ativação → avisa que é número automático
-      // (no máximo 1x por hora, pra não repetir a cada mensagem).
+      // (no máximo 1x por hora, pra não repetir a cada mensagem). Só marca
+      // "já avisei" DEPOIS de confirmar que algo saiu de verdade — senão uma
+      // falha de envio queima o throttle por 1h e o cliente fica sem
+      // resposta nenhuma, sem ninguém perceber (aconteceu de verdade, era
+      // silencioso: o erro só ia pro log).
       if (!(await wasAutoNoticeSentRecently(phone))) {
-        await markAutoNoticeSent(phone);
-        setImmediate(() =>
-          sendImageUrl(rawJid, WELCOME_IMAGE_URL, AUTO_NOTICE_CAPTION).catch((e) =>
-            console.error("[suporte] falha ao enviar aviso de número automático:", e),
-          ),
-        );
+        setImmediate(async () => {
+          let delivered = false;
+          try {
+            await sendImageUrl(rawJid, WELCOME_IMAGE_URL, AUTO_NOTICE_CAPTION);
+            delivered = true;
+          } catch (e) {
+            console.error("[suporte] falha ao enviar aviso de número automático (imagem) — tentando texto puro:", e);
+            try {
+              await sendText(rawJid, AUTO_NOTICE_CAPTION);
+              delivered = true;
+            } catch (e2) {
+              console.error("[suporte] falha também no fallback em texto do aviso de número automático:", e2);
+            }
+          }
+          if (delivered) await markAutoNoticeSent(phone);
+        });
       }
       return ok200();
     }
@@ -532,19 +546,32 @@ async function processMetaMessage(
   let justActivated = false;
   if (!active) {
     if (!normalize(text).includes(ACTIVATION_PHRASE)) {
-      // Idem: no máximo 1x por hora por número.
+      // Idem: no máximo 1x por hora por número. Só marca "já avisei" DEPOIS
+      // de confirmar que algo saiu de verdade (imagem OU o fallback em
+      // texto) — a versão anterior marcava antes de tentar o envio, então
+      // uma falha (ex.: a Meta não conseguiu buscar a URL da imagem)
+      // queimava o throttle por 1h e o cliente ficava sem nada, sem log
+      // nenhum de erro visível fora do console do EasyPanel.
       if (!(await wasAutoNoticeSentRecently(phone))) {
-        await markAutoNoticeSent(phone);
         console.log(`[suporte][meta] ${phone} sem sessão ativa e frase de ativação não bateu — enviando aviso de número automático`);
-        await metaSendImageUrl(from, WELCOME_IMAGE_URL, AUTO_NOTICE_CAPTION).catch((e) =>
-          console.error("[suporte][meta] falha ao enviar aviso de número automático:", e),
-        );
-        // Espelha no inbox do PlugZBot — antes só o inbound sincronizava, o
-        // aviso automático em si nunca aparecia lá.
-        if (plugzbotConversationId) {
-          const downloaded = await fetchUrlAsBase64(WELCOME_IMAGE_URL);
-          if (downloaded) {
-            await syncOutboundMedia(phone, "image", downloaded.base64, downloaded.mime, { caption: AUTO_NOTICE_CAPTION });
+        let delivered = await metaSendImageUrl(from, WELCOME_IMAGE_URL, AUTO_NOTICE_CAPTION);
+        let deliveredAsImage = delivered;
+        if (!delivered) {
+          console.error(`[suporte][meta] falha ao enviar aviso (imagem) para ${phone} — tentando texto puro`);
+          delivered = await metaSendText(from, AUTO_NOTICE_CAPTION);
+          if (!delivered) console.error(`[suporte][meta] falha também no fallback em texto do aviso para ${phone}`);
+        }
+        if (delivered) await markAutoNoticeSent(phone);
+
+        // Espelha no inbox do PlugZBot o que realmente foi enviado.
+        if (plugzbotConversationId && delivered) {
+          if (deliveredAsImage) {
+            const downloaded = await fetchUrlAsBase64(WELCOME_IMAGE_URL);
+            if (downloaded) {
+              await syncOutboundMedia(phone, "image", downloaded.base64, downloaded.mime, { caption: AUTO_NOTICE_CAPTION });
+            } else {
+              await syncOutbound(phone, AUTO_NOTICE_CAPTION);
+            }
           } else {
             await syncOutbound(phone, AUTO_NOTICE_CAPTION);
           }
@@ -567,9 +594,9 @@ async function processMetaMessage(
   const ch: Channel = {
     name: "meta",
     clientName,
-    send: (t) => metaSendText(from, t),
-    sendImage: (b64, cap) => metaSendImage(from, b64, cap),
-    sendImageUrl: (url, cap) => metaSendImageUrl(from, url, cap),
+    send: async (t) => { await metaSendText(from, t); },
+    sendImage: async (b64, cap) => { await metaSendImage(from, b64, cap); },
+    sendImageUrl: async (url, cap) => { await metaSendImageUrl(from, url, cap); },
     plugzbotConversationId,
   };
   await handleMessage(ctx, text, ch, justActivated);

@@ -10,10 +10,10 @@ const token = () => process.env.META_ACCESS_TOKEN ?? "";
 export const metaVerifyToken = () => process.env.META_VERIFY_TOKEN ?? "";
 export const metaConfigured = () => !!(phoneId() && token());
 
-export async function metaSendText(to: string, text: string): Promise<void> {
+export async function metaSendText(to: string, text: string): Promise<boolean> {
   if (!metaConfigured()) {
     console.warn("[suporte][meta] envio pulado — faltam META_PHONE_NUMBER_ID/META_ACCESS_TOKEN");
-    return;
+    return false;
   }
   try {
     await axios.post(
@@ -30,8 +30,10 @@ export async function metaSendText(to: string, text: string): Promise<void> {
         timeout: 30_000,
       },
     );
+    return true;
   } catch (e: any) {
     console.error("[suporte][meta] erro no envio:", e?.response?.data ?? e?.message ?? e);
+    return false;
   }
 }
 
@@ -66,12 +68,12 @@ export async function metaDownloadMedia(mediaId: string): Promise<{ base64: stri
 }
 
 // Envia imagem via Cloud API: faz upload do base64 -> media id -> envia.
-export async function metaSendImage(to: string, base64: string, caption = ""): Promise<void> {
+export async function metaSendImage(to: string, base64: string, caption = ""): Promise<boolean> {
   const pid = phoneId();
   const tok = token();
   if (!pid || !tok) {
     console.warn("[suporte][meta] envio de imagem pulado — faltam credenciais");
-    return;
+    return false;
   }
   try {
     // 1) upload da mídia
@@ -89,7 +91,7 @@ export async function metaSendImage(to: string, base64: string, caption = ""): P
     const mediaId = up.data?.id;
     if (!mediaId) {
       console.error("[suporte][meta] upload sem media id:", up.data);
-      return;
+      return false;
     }
 
     // 2) envia a imagem pelo media id
@@ -104,18 +106,23 @@ export async function metaSendImage(to: string, base64: string, caption = ""): P
       },
       { headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, timeout: 30_000 },
     );
+    return true;
   } catch (e: any) {
     console.error("[suporte][meta] erro no envio de imagem:", e?.response?.data ?? e?.message ?? e);
+    return false;
   }
 }
 
-// Envia imagem via Cloud API a partir de uma URL pública (sem upload).
-export async function metaSendImageUrl(to: string, url: string, caption = ""): Promise<void> {
+// Envia imagem via Cloud API a partir de uma URL pública (sem upload) — a
+// Meta precisa buscar essa URL no momento do envio; se estiver lenta/fora do
+// ar, o envio falha inteiro (por isso os chamadores devem ter um fallback em
+// texto puro, não depender só deste método pra garantir entrega).
+export async function metaSendImageUrl(to: string, url: string, caption = ""): Promise<boolean> {
   const pid = phoneId();
   const tok = token();
   if (!pid || !tok) {
     console.warn("[suporte][meta] envio de imagem (url) pulado — faltam credenciais");
-    return;
+    return false;
   }
   try {
     await axios.post(
@@ -129,7 +136,9 @@ export async function metaSendImageUrl(to: string, url: string, caption = ""): P
       },
       { headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, timeout: 30_000 },
     );
+    return true;
   } catch (e: any) {
     console.error("[suporte][meta] erro no envio de imagem (url):", e?.response?.data ?? e?.message ?? e);
+    return false;
   }
 }
