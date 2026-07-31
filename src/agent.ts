@@ -2,11 +2,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import { consultarConta } from "./tools/contaLookup";
 import { gerarPixAssinatura } from "./tools/pixAssinatura";
 import { withRetry } from "./services/retry";
+import { callLLM } from "./services/llm";
 import type { ChatMessage } from "./services/store";
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
-
-const MODEL = "claude-haiku-4-5-20251001";
+const MODEL = "deepseek-v4-flash";
 
 export interface UserCtx {
   jid: string;    // ex: 5511999999999@s.whatsapp.net
@@ -263,12 +262,12 @@ export async function runAgent(
   ];
 
   let response = await withRetry(
-    () => anthropic.messages.create({ model: MODEL, max_tokens: 900, system, tools, messages }),
-    { attempts: 3, baseDelayMs: 1000, label: "anthropic" },
+    () => callLLM({ model: MODEL, max_tokens: 900, temperature: 0.3, system, tools, messages }),
+    { attempts: 3, baseDelayMs: 1000, label: MODEL },
   );
 
   while (response.stop_reason === "tool_use") {
-    const toolUses = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+    const toolUses = response.content.filter((b) => b.type === "tool_use");
     messages.push({ role: "assistant", content: response.content });
 
     const toolResults: Anthropic.ToolResultBlockParam[] = await Promise.all(
@@ -282,13 +281,13 @@ export async function runAgent(
     messages.push({ role: "user", content: toolResults });
 
     response = await withRetry(
-      () => anthropic.messages.create({ model: MODEL, max_tokens: 900, system, tools, messages }),
-      { attempts: 3, baseDelayMs: 1000, label: "anthropic/tools" },
+      () => callLLM({ model: MODEL, max_tokens: 900, temperature: 0.3, system, tools, messages }),
+      { attempts: 3, baseDelayMs: 1000, label: `${MODEL}/tools` },
     );
   }
 
-  const textBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === "text");
-  let text = textBlock?.text ?? "";
+  const textBlock = response.content.find((b) => b.type === "text");
+  let text = textBlock?.type === "text" ? textBlock.text : "";
   if (flags.transfer && !text.trim()) {
     text = "Vou te transferir para um atendente humano agora. 🙏 Em instantes alguém continua seu atendimento por aqui.";
   }

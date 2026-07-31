@@ -48,7 +48,7 @@ function requireEnv(keys: string[]): void {
   }
 }
 requireEnv([
-  "ANTHROPIC_API_KEY",
+  "DEEPSEEK_API_KEY",
   "EVOLUTION_API_URL",
   "EVOLUTION_API_KEY",
   "EVOLUTION_INSTANCE",
