@@ -33,7 +33,7 @@ Webhook local: `POST http://localhost:3000/webhook` · Health: `GET /health`.
 
 ## Variáveis de ambiente
 Ver `.env.example`. Resumo:
-- `ANTHROPIC_API_KEY` — chave própria do agente (crédito isolado).
+- `DEEPSEEK_API_KEY` — chave própria do agente (crédito isolado).
 - `EVOLUTION_API_URL` / `EVOLUTION_API_KEY` / `EVOLUTION_INSTANCE` (= `Ativa`).
 - `BARBERZAP_API_URL` (base das edge functions Supabase) / `AGENT_LOOKUP_SECRET`.
 - `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (recomendado).

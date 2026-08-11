@@ -1,4 +1,4 @@
-// Retry com backoff exponencial — usado nas chamadas à API da Anthropic.
+// Retry com backoff exponencial — usado nas chamadas à API do DeepSeek.
 export async function withRetry<T>(
   fn: () => Promise<T>,
   opts: { attempts?: number; baseDelayMs?: number; label?: string } = {},

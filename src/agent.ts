@@ -1,8 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { consultarConta } from "./tools/contaLookup";
 import { gerarPixAssinatura } from "./tools/pixAssinatura";
 import { withRetry } from "./services/retry";
-import { callLLM } from "./services/llm";
+import { callLLM, type Tool, type MessageParam, type ToolResultBlockParam } from "./services/llm";
 import type { ChatMessage } from "./services/store";
 
 const MODEL = "deepseek-v4-flash";
@@ -150,7 +149,7 @@ Na sua PRIMEIRA mensagem ao usuário (após o resultado do consultar_conta), avi
 (Hoje é ${hoje}.)`;
 }
 
-const tools: Anthropic.Tool[] = [
+const tools: Tool[] = [
   {
     name: "consultar_conta",
     description:
@@ -256,7 +255,7 @@ export async function runAgent(
   const system = systemPrompt();
   const flags: AgentFlags = { transfer: false };
 
-  const messages: Anthropic.MessageParam[] = [
+  const messages: MessageParam[] = [
     ...history.map((m) => ({ role: m.role, content: m.content })),
     { role: "user", content: userMessage },
   ];
@@ -270,7 +269,7 @@ export async function runAgent(
     const toolUses = response.content.filter((b) => b.type === "tool_use");
     messages.push({ role: "assistant", content: response.content });
 
-    const toolResults: Anthropic.ToolResultBlockParam[] = await Promise.all(
+    const toolResults: ToolResultBlockParam[] = await Promise.all(
       toolUses.map(async (tool) => ({
         type: "tool_result" as const,
         tool_use_id: tool.id,

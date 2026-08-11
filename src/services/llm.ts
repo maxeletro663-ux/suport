@@ -1,66 +1,30 @@
 /**
- * Camada unificada de LLM — suporta Anthropic (Claude) e DeepSeek.
- *
- * Provedores detectados automaticamente pelo prefixo do modelo:
- *   "deepseek-*"  → DeepSeek API (OpenAI-compatible, DEEPSEEK_API_KEY)
- *   qualquer outro → Anthropic (ANTHROPIC_API_KEY)
+ * Camada de LLM — DeepSeek (API compatível com OpenAI).
  */
 
-import Anthropic from "@anthropic-ai/sdk";
 import axios from "axios";
 
-// ─── Tipo de resposta compatível com Anthropic (usado pelos dois provedores) ──
-export type LLMResponse = {
-  stop_reason: "end_turn" | "tool_use";
-  content: Array<
-    | { type: "text"; text: string }
-    | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-  >;
+// ─── Tipos de mensagem/tool (formato próprio, independente de SDK) ───────────
+export type TextBlock = { type: "text"; text: string };
+export type ToolUseBlock = { type: "tool_use"; id: string; name: string; input: Record<string, unknown> };
+export type ToolResultBlockParam = { type: "tool_result"; tool_use_id: string; content: string };
+export type ContentBlock = TextBlock | ToolUseBlock;
+export type MessageParam = { role: "user" | "assistant"; content: string | Array<ContentBlock | ToolResultBlockParam> };
+export type Tool = {
+  name: string;
+  description: string;
+  input_schema: { type: "object"; properties: Record<string, unknown>; required?: string[] };
 };
 
-// ─── Detecção de provedor ────────────────────────────────────────────────────
-export function isDeepSeekModel(model: string): boolean {
-  return model.startsWith("deepseek-");
-}
+export type LLMResponse = {
+  stop_reason: "end_turn" | "tool_use";
+  content: ContentBlock[];
+};
 
-// ─── Cliente Anthropic com cache por API key ─────────────────────────────────
-const anthropicCache = new Map<string, Anthropic>();
-
-function getAnthropic(apiKey?: string): Anthropic {
-  const key = apiKey || process.env.ANTHROPIC_API_KEY!;
-  if (!anthropicCache.has(key)) anthropicCache.set(key, new Anthropic({ apiKey: key }));
-  return anthropicCache.get(key)!;
-}
-
-// ─── Chamada Anthropic ───────────────────────────────────────────────────────
-async function callClaude(params: {
-  model: string;
-  messages: Anthropic.MessageParam[];
-  system: string;
-  tools: Anthropic.Tool[];
-  max_tokens: number;
-  temperature: number;
-  anthropicApiKey?: string;
-}): Promise<LLMResponse> {
-  const client = getAnthropic(params.anthropicApiKey);
-  const res = await client.messages.create({
-    model: params.model,
-    max_tokens: params.max_tokens,
-    temperature: params.temperature,
-    system: params.system,
-    tools: params.tools,
-    messages: params.messages,
-  });
-  return {
-    stop_reason: res.stop_reason as "end_turn" | "tool_use",
-    content: res.content as LLMResponse["content"],
-  };
-}
-
-// ─── Conversão de mensagens Anthropic → OpenAI ───────────────────────────────
+// ─── Conversão de mensagens (formato próprio) → OpenAI ───────────────────────
 type OAIMessage = Record<string, unknown>;
 
-function toOpenAIMessages(msgs: Anthropic.MessageParam[], system: string): OAIMessage[] {
+function toOpenAIMessages(msgs: MessageParam[], system: string): OAIMessage[] {
   const result: OAIMessage[] = [{ role: "system", content: system }];
 
   for (const msg of msgs) {
@@ -112,8 +76,8 @@ function toOpenAIMessages(msgs: Anthropic.MessageParam[], system: string): OAIMe
   return result;
 }
 
-// ─── Conversão de tools Anthropic → OpenAI ───────────────────────────────────
-function toOpenAITools(tools: Anthropic.Tool[]): OAIMessage[] {
+// ─── Conversão de tools (formato próprio) → OpenAI ───────────────────────────
+function toOpenAITools(tools: Tool[]): OAIMessage[] {
   return tools.map((t) => ({
     type: "function",
     function: { name: t.name, description: t.description, parameters: t.input_schema },
@@ -123,11 +87,11 @@ function toOpenAITools(tools: Anthropic.Tool[]): OAIMessage[] {
 // ─── Chamada DeepSeek (API OpenAI-compatible) ────────────────────────────────
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1/chat/completions";
 
-async function callDeepSeek(params: {
+export async function callLLM(params: {
   model: string;
-  messages: Anthropic.MessageParam[];
+  messages: MessageParam[];
   system: string;
-  tools: Anthropic.Tool[];
+  tools: Tool[];
   max_tokens: number;
   temperature: number;
   deepseekApiKey?: string;
@@ -140,8 +104,8 @@ async function callDeepSeek(params: {
       model: params.model,
       // deepseek-v4-flash roda em thinking mode por padrão, o que exige devolver
       // reasoning_content do turno anterior sempre que houve tool_call — nosso
-      // formato de mensagem (baseado em Anthropic) não carrega esse campo, então
-      // a 2a chamada do loop agêntico quebrava com 400 (reasoning_content ausente).
+      // formato de mensagem não carrega esse campo, então a 2a chamada do loop
+      // agêntico quebrava com 400 (reasoning_content ausente).
       thinking: { type: "disabled" },
       messages: toOpenAIMessages(params.messages, params.system),
       tools: toOpenAITools(params.tools),
@@ -176,20 +140,4 @@ async function callDeepSeek(params: {
     stop_reason: "end_turn",
     content: [{ type: "text" as const, text: msg.content || "" }],
   };
-}
-
-// ─── Ponto de entrada unificado ──────────────────────────────────────────────
-export async function callLLM(params: {
-  model: string;
-  messages: Anthropic.MessageParam[];
-  system: string;
-  tools: Anthropic.Tool[];
-  max_tokens: number;
-  temperature: number;
-  anthropicApiKey?: string;
-  deepseekApiKey?: string;
-}): Promise<LLMResponse> {
-  return isDeepSeekModel(params.model)
-    ? callDeepSeek(params)
-    : callClaude(params);
 }
