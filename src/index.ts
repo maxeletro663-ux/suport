@@ -616,6 +616,19 @@ app.post("/webhook/meta", async (request, reply) => {
         const value = change.value ?? {};
         const msgCount = Array.isArray(value.messages) ? value.messages.length : 0;
         console.log(`[suporte][meta] change field=${change.field} messages=${msgCount} statuses=${Array.isArray(value.statuses) ? value.statuses.length : 0}`);
+
+        // O webhook é de APP, não de número: qualquer WABA assinada neste app
+        // cai aqui. Sem esta checagem, a Bia responde por número de terceiro
+        // (foi o que aconteceu com uma conta conectada no PlugZBot).
+        const ownPhoneId = process.env.META_PHONE_NUMBER_ID ?? "";
+        const eventPhoneId = String(value?.metadata?.phone_number_id ?? "");
+        if (ownPhoneId && eventPhoneId && eventPhoneId !== ownPhoneId) {
+          console.warn(
+            `[suporte][meta] evento ignorado — phone_number_id ${eventPhoneId} não é o do suporte (${ownPhoneId})`,
+          );
+          continue;
+        }
+
         // Ignora eventos de status (sent/delivered/read) — só tratamos mensagens.
         if (!Array.isArray(value.messages)) continue;
         const contacts: any[] = value.contacts ?? [];

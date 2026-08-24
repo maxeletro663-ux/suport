@@ -3,7 +3,7 @@ import axios from "axios";
 // ── Cloud API oficial (Meta WhatsApp) ──────────────────────────────────
 // Usada quando o suporte é acionado pelo botão da NOTIFICAÇÃO (número da API
 // oficial). O mesmo cérebro da Bia responde por aqui via Graph API.
-const API_VERSION = process.env.META_API_VERSION ?? "v21.0";
+const API_VERSION = process.env.META_API_VERSION ?? "v25.0";
 const phoneId = () => process.env.META_PHONE_NUMBER_ID ?? "";
 const token = () => process.env.META_ACCESS_TOKEN ?? "";
 
